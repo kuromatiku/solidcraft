@@ -5785,7 +5785,7 @@ pub(crate) fn dialog_pick(app: &mut SolveApp, hit: &Hit, sel: Sel) {
         && d.press_pull
         && (d.inputs.first().is_some_and(|i| i.items.is_empty()) || tablet_switch)
         && match &sel {
-            Sel::Edge { .. } | Sel::Profile { .. } => true,
+            Sel::Profile { .. } => true,
             Sel::Face { body, index, .. } => {
                 tablet_switch
                     || crate::dialogs::planar_face(&app.session, body, *index).is_none()
@@ -8135,7 +8135,7 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
                             if app.preferences.tablet_ui && !add && app.session.active_sketch.is_none() && app.tool.is_none() && app.dialog.is_none()
                             {
                                 if let Some(s) = &sel {
-                                    if matches!(s, Sel::Face { .. } | Sel::Edge { .. } | Sel::Profile { .. }) {
+                                    if matches!(s, Sel::Face { .. } | Sel::Profile { .. }) {
                                         app.session.selection = vec![s.clone()];
                                         app.start("solid.press_pull");
                                     }

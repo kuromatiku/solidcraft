@@ -961,7 +961,6 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
         Some(n) if ui.ctx().is_being_dragged(arrow_id) => crate::extrude_face_snap::stops(app, d, base, n * sign),
         _ => Vec::new(),
     };
-    let section = matches!(d.kind, Kind::Section { .. });
     // With To Object picked the box holds To Offset, which is used, whatever All says: the
     // engine takes To Object first.
     let names_all = all_on && !d.inputs.iter().any(|input| input.label == "To Object");
@@ -1037,14 +1036,13 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
             }
             box_at = ts + vec2(14.0, -12.0);
             anchor = ts;
-            if section {
-                past_tip = Some((bs, ts));
-            }
+            past_tip = Some((bs, ts));
         }
     }
     if on_second && let Some(t2) = tip2 {
         box_at = t2 + vec2(14.0, -12.0);
         anchor = t2;
+        past_tip = Some((bs, t2));
     }
     let note = crate::drag_extrude::step_note(app);
     // Also without an arrow (the value does not evaluate yet): the box still keeps off the handles.
@@ -1052,10 +1050,15 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
     // last word, as a box over a grip takes the press meant for it (#6608).
     let mut place = box_place(app, proj);
     let size = box_size(ui, egui::Id::unique("sc_canvas_area"), label, note.as_deref());
+    let gap = if app.preferences.tablet_ui { 20.0 } else { ARROW_BOX_GAP };
     let rect = match past_tip {
         Some((from, ts)) => {
-            place.handles = Some(arrow_grab(from, ts));
-            keep_in_view(past_arrow(from, ts, size), place.view)
+            let mut grab = arrow_grab(from, ts);
+            if two_distances && let Some(t2) = tip2 {
+                grab = grab.union(arrow_grab(from, t2));
+            }
+            place.handles = Some(grab);
+            keep_in_view(past_arrow(from, ts, size, gap), place.view)
         }
         None => rect_at(box_at, egui::Align2::LEFT_TOP, size),
     };
@@ -1408,9 +1411,9 @@ fn arrow_grab(from: Pos2, ts: Pos2) -> egui::Rect {
 }
 
 /// Where a value box of `size` goes past the tip of the arrow from `from` to `ts`: beyond the
-/// end the arrow points at, centred on its line, and [`ARROW_BOX_GAP`] clear of
+/// end the arrow points at, centred on its line, and `gap` clear of
 /// [`arrow_grab`].
-fn past_arrow(from: Pos2, ts: Pos2, size: egui::Vec2) -> egui::Rect {
+fn past_arrow(from: Pos2, ts: Pos2, size: egui::Vec2, gap: f32) -> egui::Rect {
     let u = Some((ts - from).normalized()).filter(|u| u.is_finite() && u.length() > 0.5).unwrap_or(vec2(0.0, -1.0));
     let pivot = match (u.x.abs() > u.y.abs(), u.x > 0.0, u.y > 0.0) {
         (true, true, _) => egui::Align2::LEFT_CENTER,
@@ -1418,8 +1421,8 @@ fn past_arrow(from: Pos2, ts: Pos2, size: egui::Vec2) -> egui::Rect {
         (false, _, true) => egui::Align2::CENTER_TOP,
         (false, _, false) => egui::Align2::CENTER_BOTTOM,
     };
-    let grab = arrow_grab(from, ts).expand(ARROW_BOX_GAP);
-    let mut rect = rect_at(ts + u * (ARROW_TIP * 0.5 + ARROW_BOX_GAP), pivot, size);
+    let grab = arrow_grab(from, ts).expand(gap);
+    let mut rect = rect_at(ts + u * (ARROW_TIP * 0.5 + gap), pivot, size);
     for _ in 0..16 {
         if !rect.intersects(grab) {
             break;
@@ -2686,7 +2689,7 @@ mod tests {
             let a = k as f32 * std::f32::consts::TAU / 32.0;
             for len in [0.0, 40.0, 120.0] {
                 let from = ts - vec2(a.cos(), a.sin()) * len;
-                let rect = past_arrow(from, ts, size);
+                let rect = past_arrow(from, ts, size, ARROW_BOX_GAP);
                 assert!((rect.size() - size).length() < 1e-3, "{rect:?}");
                 let grab = arrow_grab(from, ts).expand(ARROW_BOX_GAP - 0.5);
                 assert!(!rect.intersects(grab), "angle {a}, length {len}: the box {rect:?} meets the arrow's grab {grab:?}");

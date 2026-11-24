@@ -8142,6 +8142,14 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
                                     if matches!(s, Sel::Face { .. } | Sel::Profile { .. }) {
                                         app.session.selection = vec![s.clone()];
                                         app.start("solid.press_pull");
+                                    } else if let Sel::ExternalSketchCurve { sketch, .. } = s {
+                                        let n = crate::open_meshing::session_world(&app.session).sketch(*sketch).map_or(0, |sk| sk.profiles.len());
+                                        if n > 0 {
+                                            let items: Vec<serde_json::Value> =
+                                                (0..n).map(|i| serde_json::json!({"type": "profile", "sketch": sketch, "index": i})).collect();
+                                            let _ = app.run("select.set", serde_json::json!({ "items": items }));
+                                            app.start("solid.extrude");
+                                        }
                                     }
                                 }
                             }
@@ -8277,11 +8285,33 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
             if app.tool.is_some() {
                 crate::tools::finish(app);
             } else if app.dialog.is_none() {
+                if app.preferences.tablet_ui {
+                    app.menu.radial = true;
+                }
                 crate::context_menu::open(app, p, held_mods);
             } else if crate::dialogs_frame::open_menu(app, p) {
                 // A centreline of the Frame Member being made: its Remove Tube menu (#15705).
             } else if app.preferences.right_click_confirms {
                 crate::dialogs::right_click(app);
+            }
+        }
+        // Tablet Long-Press: Opens Radial Marking Menu
+        if app.preferences.tablet_ui && app.tool.is_none() && app.dialog.is_none() && app.viewport.context_menu.is_none() {
+            let is_long_press = ui.input(|i| {
+                if i.pointer.primary_down() {
+                    if let (Some(start), Some(origin)) = (i.pointer.press_start_time(), i.pointer.press_origin()) {
+                        let duration = i.time - start;
+                        let dist = i.pointer.latest_pos().map_or(0.0, |pos| (pos - origin).length());
+                        return duration >= 0.45 && dist < 12.0;
+                    }
+                }
+                false
+            });
+            if is_long_press {
+                if let Some(origin) = ui.input(|i| i.pointer.press_origin()) {
+                    app.menu.radial = true;
+                    crate::context_menu::open(app, origin, held_mods);
+                }
             }
         }
     }

@@ -385,9 +385,10 @@ pub fn radial_items(app: &SolveApp) -> Vec<Item> {
     };
     let delete = act("ui.delete", "Delete", "delete").key("Del").on(!app.session.selection.is_empty());
     if app.session.active_sketch.is_some() {
+        let slot2 = if !app.session.selection.is_empty() { delete } else { cmd(app, "sketch.trim", "Trim") };
         return vec![
             repeat,
-            delete,
+            slot2,
             cmd(app, "sketch.line", "Line"),
             cmd(app, "sketch.rectangle.two_point", "Rectangle"),
             act("ui.finishSketch", "Finish Sketch", "finish"),
@@ -2807,7 +2808,7 @@ pub fn open_for(app: &mut SolveApp, at: Pos2, target: Target) {
     app.menu.submenu.clear();
     app.menu.submenu_key = None;
     app.menu.submenu_leave = None;
-    app.menu.radial = target == Target::Viewport && app.preferences.radial_context_menu;
+    app.menu.radial = target == Target::Viewport && (app.preferences.radial_context_menu || app.preferences.tablet_ui);
     app.menu.target = target;
     app.menu.flick = false;
     app.menu.opener = None;

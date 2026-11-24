@@ -122,14 +122,33 @@ fn show_top_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut 
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = vec2(8.0, 0.0);
                     if in_sketch {
-                        ui.colored_label(Color32::from_rgb(0x38, 0xbd, 0xf8), "✏️ Sketch Mode");
+                        if app.tool.as_ref().is_some_and(|t| t.cmd == "sketch.trim") {
+                            ui.colored_label(Color32::from_rgb(0xf4, 0x3f, 0x5e), "✂️ Trim: Drag across curves to cut");
+                            let trim_done_btn = egui::Button::new(egui::RichText::new("✓ Done").color(Color32::WHITE).strong())
+                                .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
+                                .min_size(vec2(75.0, 36.0));
+                            if ui.add(trim_done_btn).backing_on_hover_text("Finish trimming").clicked() {
+                                crate::tools::finish(app);
+                            }
+                        } else {
+                            ui.colored_label(Color32::from_rgb(0x38, 0xbd, 0xf8), "✏️ Sketch Mode");
+                        }
 
                         // Finish Sketch Button
                         let finish_btn = egui::Button::new(egui::RichText::new("✓ Finish").color(Color32::WHITE).strong())
                             .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
                             .min_size(vec2(80.0, 36.0));
                         if ui.add(finish_btn).backing_on_hover_text("Finish Sketch and Save").clicked() {
+                            let sid = app.session.active_sketch;
                             app.start_pinned("sketch.finish", None);
+                            if let Some(id) = sid {
+                                let n = crate::open_meshing::session_world(&app.session).sketch(id).map_or(0, |s| s.profiles.len());
+                                if n > 0 {
+                                    let items: Vec<serde_json::Value> =
+                                        (0..n).map(|i| serde_json::json!({"type": "profile", "sketch": id, "index": i})).collect();
+                                    let _ = app.run("select.set", serde_json::json!({ "items": items }));
+                                }
+                            }
                         }
 
                         // Cancel Sketch Button
@@ -175,15 +194,51 @@ fn show_top_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut 
                         .first()
                         .is_some_and(|s| matches!(s, solidcraft_engine::Sel::Face { .. } | solidcraft_engine::Sel::Plane { .. }))
                     {
-                        ui.colored_label(Color32::from_rgb(0x38, 0xbd, 0xf8), "📐 Face / Plane Picked");
+                        ui.colored_label(Color32::from_rgb(0x38, 0xbd, 0xf8), "📐 Face Picked");
+                        let extrude_btn = egui::Button::new(egui::RichText::new("⬢ Extrude").color(Color32::WHITE).strong())
+                            .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
+                            .min_size(vec2(90.0, 36.0));
+                        if ui.add(extrude_btn).backing_on_hover_text("Extrude this face").clicked() {
+                            app.start("solid.press_pull");
+                        }
                         let sketch_face_btn = egui::Button::new(egui::RichText::new("✏️ Sketch on Face").color(Color32::WHITE).strong())
                             .fill(Color32::from_rgb(0x02, 0x84, 0xc7))
                             .min_size(vec2(125.0, 36.0));
                         if ui.add(sketch_face_btn).backing_on_hover_text("Open 2D sketch on this planar face").clicked() {
                             app.start("sketch.create");
                         }
+                    } else if app
+                        .session
+                        .selection
+                        .first()
+                        .is_some_and(|s| matches!(s, solidcraft_engine::Sel::Profile { .. } | solidcraft_engine::Sel::ExternalSketchCurve { .. }))
+                    {
+                        ui.colored_label(Color32::from_rgb(0x38, 0xbd, 0xf8), "⭕ Profile Picked");
+                        let extrude_btn = egui::Button::new(egui::RichText::new("⬢ Extrude").color(Color32::WHITE).strong())
+                            .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
+                            .min_size(vec2(95.0, 36.0));
+                        if ui.add(extrude_btn).backing_on_hover_text("Extrude this sketch profile into 3D").clicked() {
+                            if let Some(solidcraft_engine::Sel::ExternalSketchCurve { sketch, .. }) = app.session.selection.first() {
+                                let n = crate::open_meshing::session_world(&app.session).sketch(*sketch).map_or(0, |sk| sk.profiles.len());
+                                if n > 0 {
+                                    let items: Vec<serde_json::Value> =
+                                        (0..n).map(|i| serde_json::json!({"type": "profile", "sketch": sketch, "index": i})).collect();
+                                    let _ = app.run("select.set", serde_json::json!({ "items": items }));
+                                }
+                            }
+                            app.start("solid.extrude");
+                        }
                     } else {
                         ui.colored_label(t.text, "📦 3D Part Modeling");
+                    }
+
+                    // Quick Radial Wheel Menu access
+                    let radial_btn = egui::Button::new(egui::RichText::new("⚡ Menu").color(Color32::WHITE).strong())
+                        .fill(Color32::from_rgb(0x33, 0x41, 0x55))
+                        .min_size(vec2(68.0, 36.0));
+                    if ui.add(radial_btn).backing_on_hover_text("Open Radial Action Wheel").clicked() {
+                        app.menu.radial = true;
+                        crate::context_menu::open_for(app, screen.center(), crate::context_menu::Target::Viewport);
                     }
                 });
             });
@@ -304,7 +359,8 @@ fn show_tool_dock(app: &mut SolveApp, ctx: &egui::Context, screen: Rect) {
                 ui.spacing_mut().item_spacing = vec2(0.0, 6.0);
 
                 for tool in tools {
-                    let is_active = app.tool.as_ref().is_some_and(|active| active.cmd == tool.cmd);
+                    let is_active = app.tool.as_ref().is_some_and(|active| active.cmd == tool.cmd)
+                        || app.dialog.as_ref().and_then(|d| d.command()).is_some_and(|cmd| cmd == tool.cmd);
                     let (rect, _) = ui.allocate_exact_size(vec2(DOCK_BTN_SIZE, DOCK_BTN_SIZE), Sense::click());
                     let resp = ui.interact(rect, ui.scope_id().with(tool.cmd), Sense::click());
 
@@ -330,6 +386,27 @@ fn show_tool_dock(app: &mut SolveApp, ctx: &egui::Context, screen: Rect) {
                             app.start(tool.cmd);
                         }
                     }
+                }
+
+                // Divider
+                let (div_rect, _) = ui.allocate_exact_size(vec2(DOCK_BTN_SIZE, 1.0), Sense::hover());
+                ui.painter().rect_filled(div_rect, 0.0, t.border);
+
+                // Quick Radial Wheel button
+                let (radial_rect, _) = ui.allocate_exact_size(vec2(DOCK_BTN_SIZE, DOCK_BTN_SIZE), Sense::click());
+                let radial_resp = ui.interact(radial_rect, ui.scope_id().with("tablet_dock_radial"), Sense::click());
+                let radial_bg = if app.menu.radial {
+                    t.accent
+                } else if radial_resp.hovered() {
+                    t.hover
+                } else {
+                    Color32::from_rgb(0x33, 0x41, 0x55)
+                };
+                ui.painter().rect_filled(radial_rect, t.radius_md, radial_bg);
+                ui.painter().text(radial_rect.center(), Align2::CENTER_CENTER, "⚡", egui::FontId::proportional(20.0), Color32::WHITE);
+                if radial_resp.backing_on_hover_text("Quick Radial Actions (⚡)").clicked() {
+                    app.menu.radial = true;
+                    crate::context_menu::open_for(app, screen.center(), crate::context_menu::Target::Viewport);
                 }
             });
         });

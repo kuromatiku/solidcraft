@@ -1848,14 +1848,16 @@ pub fn preview(app: &SolveApp, t: &Tool, painter: &egui::Painter, proj: &Proj) {
     let stroke = Stroke::new(1.5, tk.sketch_accent);
     // A Trim drag: the pieces it will remove, then the path drawn so far.
     if t.cmd == "sketch.trim" && !t.pts.is_empty() {
+        let trail_w = if app.preferences.tablet_ui { 6.0 } else { 4.0 };
         TRIM_REMOVED.with(|r| {
             for piece in r.borrow().iter() {
                 let line: Vec<Pos2> = piece.iter().filter_map(|p| to(*p)).collect();
-                painter.add(egui::Shape::line(line, Stroke::new(4.0, tk.error.gamma_multiply(0.8))));
+                painter.add(egui::Shape::line(line, Stroke::new(trail_w, tk.error.gamma_multiply(0.8))));
             }
         });
         let path: Vec<Pos2> = t.pts.iter().filter_map(|p| to(p.0)).collect();
-        painter.add(egui::Shape::line(path, stroke));
+        let path_w = if app.preferences.tablet_ui { 3.0 } else { 1.5 };
+        painter.add(egui::Shape::line(path, Stroke::new(path_w, stroke.color)));
         return;
     }
     if let Some((hp, snap)) = &t.hover

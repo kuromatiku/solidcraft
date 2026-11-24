@@ -43,6 +43,15 @@ pub struct Observed {
     pub on_canvas: bool,
 }
 
+/// The active input profile dynamically identified from pointer and touch events.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum InputProfile {
+    #[default]
+    Desktop,
+    Touch,
+    Pen,
+}
+
 /// What happened to the pointer, as the page's listeners see it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Happened {
@@ -80,12 +89,24 @@ pub struct Tracker {
     /// What the browser did with the last right-click (#20011): a browser may take a right-click
     /// for itself and never offer the page its context menu event.
     browser_menu: BrowserMenu,
+    /// Active input profile from the latest pointer interactions.
+    profile: InputProfile,
 }
 
 /// The most stylus touches waiting for a frame.
 const MAX_STYLUS: usize = 32;
 
 impl Tracker {
+    /// The active input profile.
+    pub fn profile(&self) -> InputProfile {
+        self.profile
+    }
+
+    /// Record the active input profile.
+    pub fn note_profile(&mut self, profile: InputProfile) {
+        self.profile = profile;
+    }
+
     /// Track the pen tip independently of mouse chords and other pointer contacts.
     fn note_pen(&mut self, id: i32, pressed: bool, on_canvas: bool, pos: Pos2) {
         if pressed && on_canvas {
@@ -138,6 +159,24 @@ impl Tracker {
                 _ => None,
             })
             .filter(|pos| pos.distance(at) <= solidcraft_ui_egui::pencil::PEN_RELEASE_SLOP)
+    }
+
+    /// Match the actual pen press: preserve the press position until an event in this frame
+    /// matches it.
+    fn take_pen_press(&mut self, events: &[Event]) -> Option<Pos2> {
+        let at = self.pen_press?;
+        let matched = events
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, .. } => Some(*pos),
+                _ => None,
+            })
+            .filter(|pos| pos.distance(at) <= solidcraft_ui_egui::pencil::PEN_RELEASE_SLOP);
+        if matched.is_some() {
+            self.pen_press = None;
+        }
+        matched.or(Some(at))
     }
 
     /// Note what happened. Returns true when the held buttons changed, so a frame should run.
@@ -230,7 +269,7 @@ pub fn egui_down(ctx: &egui::Context) -> [bool; NUM_POINTER_BUTTONS] {
 pub fn reconcile(tracker: &std::cell::RefCell<Tracker>, ctx: &egui::Context, raw: &mut egui::RawInput) -> solidcraft_ui_egui::pencil::PlatformTaps {
     let mut tracker = tracker.borrow_mut();
     let taps = solidcraft_ui_egui::pencil::PlatformTaps {
-        pen_press: tracker.pen_press.take(),
+        pen_press: tracker.take_pen_press(&raw.events),
         pen_release: tracker.take_pen_release(&raw.events),
         finger_down: tracker.take_finger_down(),
         pen_down: tracker.pen_contact.is_some(),
@@ -291,6 +330,7 @@ mod web {
                             let on_canvas = e.target().is_some_and(|t| canvas.is_same_node(t.dyn_ref::<web_sys::Node>()));
                             tracker.borrow_mut().note_finger(on_canvas, at());
                         }
+                        tracker.borrow_mut().note_profile(super::InputProfile::Touch);
                         return;
                     }
                     let mut down_on_canvas = false;
@@ -300,8 +340,13 @@ mod web {
                         let _ = canvas.set_pointer_capture(e.pointer_id());
                     }
                     let mut tracker = tracker.borrow_mut();
-                    if source == "pen" && web_sys::MouseEvent::button(e) == 0 && name != "pointermove" {
-                        tracker.note_pen(e.pointer_id(), name == "pointerdown", down_on_canvas, at());
+                    if source == "pen" {
+                        tracker.note_profile(super::InputProfile::Pen);
+                        if web_sys::MouseEvent::button(e) == 0 && name != "pointermove" {
+                            tracker.note_pen(e.pointer_id(), name == "pointerdown", down_on_canvas, at());
+                        }
+                    } else if source == "mouse" {
+                        tracker.note_profile(super::InputProfile::Desktop);
                     }
                     if tracker.note(Happened::Pointer { buttons: e.buttons(), down_on_canvas }) {
                         ctx.request_repaint();

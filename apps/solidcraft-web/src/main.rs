@@ -50,6 +50,18 @@ fn query_flag(query: &str, name: &str) -> bool {
     url::form_urlencoded::parse(query.trim_start_matches('?').as_bytes()).any(|(key, _)| key == name)
 }
 
+/// Explicit query overrides for tablet or desktop touch modes.
+#[cfg(any(target_arch = "wasm32", test))]
+fn tablet_override(query: &str) -> Option<bool> {
+    if query_flag(query, "desktop") || query_flag(query, "mouse") {
+        Some(false)
+    } else if query_flag(query, "tablet") || query_flag(query, "touch") {
+        Some(true)
+    } else {
+        None
+    }
+}
+
 /// Launch options use exact query keys; URL values are decoded only once.
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Default, Debug)]
@@ -1218,6 +1230,18 @@ mod web {
         fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
             // First, so everything after sees the buttons the browser holds.
             let taps = crate::mouse_buttons::reconcile(&self.mouse_buttons, ctx, raw);
+            match self.mouse_buttons.borrow().profile() {
+                crate::mouse_buttons::InputProfile::Pen => {
+                    self.app.preferences.pencil_mode = true;
+                    self.app.preferences.touchscreen_navigation = true;
+                    self.app.preferences.view_confirm_corner = true;
+                }
+                crate::mouse_buttons::InputProfile::Touch => {
+                    self.app.preferences.touchscreen_navigation = true;
+                    self.app.preferences.view_confirm_corner = true;
+                }
+                crate::mouse_buttons::InputProfile::Desktop => {}
+            }
             solidcraft_ui_egui::window_chrome::release_stale_input(ctx, raw);
             let now = raw.time.unwrap_or_else(|| ctx.input(|i| i.time));
             if let Some(delay) = self.wheel_gestures.update(raw, now, self.app.preferences.browser_scroll_wheel) {
@@ -1303,6 +1327,16 @@ mod web {
             return false;
         }
         storage.and_then(|s| s.get_item(&crate::channel::key(WEBGL_KEY)).ok().flatten()).is_some()
+    }
+
+    /// Whether this device is a tablet or touchscreen device.
+    fn is_tablet_device(window: &web_sys::Window, query: &str) -> bool {
+        if let Some(forced) = crate::tablet_override(query) {
+            return forced;
+        }
+        let coarse_pointer = window.match_media("(pointer: coarse)").ok().flatten().is_some_and(|mql| mql.matches());
+        let has_touch_points = window.navigator().max_touch_points() > 0;
+        coarse_pointer || has_touch_points
     }
 
     /// Install the GPU viewport the desktop's way: the scene is drawn offscreen with its own depth
@@ -1448,6 +1482,17 @@ mod web {
                             let key = crate::channel::key(solidcraft_ui_egui::usage_stats::STORAGE_KEY);
                             app.load_usage_stats(cc.storage.and_then(|s| s.get_string(&key)).as_deref());
                         }
+                        let tablet_mode = is_tablet_device(&window, &query());
+                        if tablet_mode {
+                            app.preferences.touchscreen_navigation = true;
+                            app.preferences.pencil_mode = true;
+                            app.preferences.view_confirm_corner = true;
+                            cc.egui_ctx.global_style_mut(|style| {
+                                style.spacing.interact_size.y = style.spacing.interact_size.y.max(40.0);
+                                style.spacing.button_padding = egui::vec2(10.0, 8.0);
+                                style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+                            });
+                        }
                         if let Some(rs) = &cc.wgpu_render_state {
                             install_viewport(&mut app, rs);
                         }
@@ -1542,6 +1587,16 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tablet_override_query_flags() {
+        assert_eq!(tablet_override("?tablet"), Some(true));
+        assert_eq!(tablet_override("?touch"), Some(true));
+        assert_eq!(tablet_override("?desktop"), Some(false));
+        assert_eq!(tablet_override("?mouse"), Some(false));
+        assert_eq!(tablet_override("?sample"), None);
+        assert_eq!(tablet_override("?open=file.solidcraft"), None);
+    }
 
     #[test]
     fn link_query_decodes_once_and_embed_disables_persistence() {

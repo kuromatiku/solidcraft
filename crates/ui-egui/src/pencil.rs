@@ -29,9 +29,9 @@ const TAP_TIME: f64 = 0.4;
 /// The farthest a finger may move and still tap, in points.
 const TAP_SLOP: f32 = 12.0;
 /// The longest gap between the two taps of a double-tap, in seconds.
-const DOUBLE_TAP_TIME: f64 = 0.4;
+pub(crate) const DOUBLE_TAP_TIME: f64 = 0.45;
 /// The farthest apart the two taps of a double-tap may be, in points.
-const DOUBLE_TAP_SLOP: f32 = 24.0;
+pub(crate) const DOUBLE_TAP_SLOP: f32 = 24.0;
 /// A finger reported down whose touch events never come stops holding presses back after this
 /// long, in seconds.
 const ORPHAN_TIME: f64 = 1.0;
@@ -88,6 +88,8 @@ pub(crate) struct Fingers {
     several: bool,
     /// The last finger tap in the view: where and when it ended.
     last_tap: Option<(Pos2, f64)>,
+    /// The last pen tap in the view, for pen double-tap selection.
+    pub(crate) last_pen_tap: Option<(Pos2, f64)>,
     /// A finger double-tap in the view, for the viewport to act on.
     pub(crate) double_tap: Option<Pos2>,
     /// Touches that are a pen's, not a finger's: they are left out of the frame.
@@ -213,7 +215,8 @@ pub(crate) fn filter(app: &mut SolveApp, ctx: &egui::Context, raw: &mut RawInput
     for e in &mut raw.events {
         if let Event::PointerButton { pos, button: PointerButton::Primary, pressed, .. } = *e {
             let pen = if pressed { taps.pen_press } else { taps.pen_release };
-            if !is_pen_release(pen, pos) {
+            let is_pen = is_pen_release(pen, pos) || (taps.pen_down && !fingers.contacts.iter().any(|c| c.at.distance(pos) <= TAP_SLOP));
+            if !is_pen {
                 *e = Event::PointerMoved(pos);
             }
         }

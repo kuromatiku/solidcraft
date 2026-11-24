@@ -8118,8 +8118,20 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
         }
         // A pen double-tap takes the whole body or sketch under it. Its two taps toggled the
         // item there and back, so the selection before them gains the whole.
+        let pen_double = if pen_select {
+            let now = ui.input(|i| i.time);
+            match app.viewport.fingers.last_pen_tap.take() {
+                Some((at, when)) if now - when <= crate::pencil::DOUBLE_TAP_TIME && p.distance(at) <= crate::pencil::DOUBLE_TAP_SLOP => true,
+                _ => {
+                    app.viewport.fingers.last_pen_tap = Some((p, now));
+                    false
+                }
+            }
+        } else {
+            false
+        };
         if pen_select
-            && resp.double_clicked()
+            && (resp.double_clicked() || pen_double)
             && !held
             && app.tool.is_none()
             && app.dialog.is_none()
@@ -8211,6 +8223,17 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
             && !crate::edit_in_place::double_click_face(app, &body)
         {
             app.edit_feature_of_face(&body, index, point);
+        }
+        // Double-click or pen double-tap on empty space: fit view to frame all geometry.
+        if (resp.double_clicked() || pen_double)
+            && !held
+            && !dim_edit
+            && mods.is_none()
+            && app.tool.is_none()
+            && app.dialog.is_none()
+            && app.viewport.hover.is_none()
+        {
+            let _ = app.run("view.fit", json!({}));
         }
         // A right-click, unless the same press opened the mouse gestures' ring: it finishes a
         // tool, confirms a dialog's input (when that preference is on), or opens the menu. egui's

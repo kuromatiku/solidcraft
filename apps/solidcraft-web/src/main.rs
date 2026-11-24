@@ -1482,13 +1482,16 @@ mod web {
                             let key = crate::channel::key(solidcraft_ui_egui::usage_stats::STORAGE_KEY);
                             app.load_usage_stats(cc.storage.and_then(|s| s.get_string(&key)).as_deref());
                         }
-                        let tablet_mode = is_tablet_device(&window, &query());
+                        let tablet_mode = is_tablet_device(&window, &query()) || crate::query_flag(&query(), "tablet");
                         if tablet_mode {
                             app.preferences.touchscreen_navigation = true;
                             app.preferences.pencil_mode = true;
                             app.preferences.view_confirm_corner = true;
+                            app.preferences.tablet_ui = true;
+                            app.ui.show_browser = false;
+                            app.ui.show_timeline = false;
                             cc.egui_ctx.global_style_mut(|style| {
-                                style.spacing.interact_size.y = style.spacing.interact_size.y.max(40.0);
+                                style.spacing.interact_size.y = style.spacing.interact_size.y.max(44.0);
                                 style.spacing.button_padding = egui::vec2(10.0, 8.0);
                                 style.spacing.item_spacing = egui::vec2(8.0, 8.0);
                             });

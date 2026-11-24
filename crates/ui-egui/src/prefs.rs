@@ -1657,6 +1657,8 @@ preference_settings! {
     /// While a dialog or a sketch is open, OK and Cancel in the view's top right corner, with the
     /// axis view moved down below them (#6709). Off by default.
     view_confirm_corner: bool = false, PAGE_LAYOUT;
+    /// Full iPad-native touch UI: floating island top bar, side tool dock, slide-over items drawer.
+    tablet_ui: bool = false, PAGE_LAYOUT;
     /// A thin bar along the window's bottom edge: what is being edited, the open sketch's state
     /// and the design's units (#7243). Off by default.
     status_bar: bool = false, PAGE_LAYOUT;

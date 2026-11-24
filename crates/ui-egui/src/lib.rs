@@ -372,6 +372,7 @@ pub mod starting;
 mod status_bar;
 #[cfg(test)]
 mod sweep_dialog_tests;
+pub mod tablet_ui;
 pub(crate) mod test_boat;
 pub mod theme;
 pub use solidcraft_ui_kit::theme_files;
@@ -4574,7 +4575,7 @@ impl SolveApp {
             view_windows::show_clean(self, ui);
             return;
         }
-        if !self.embedded && !self.embed_editor {
+        if !self.embedded && !self.embed_editor && !self.preferences.tablet_ui {
             toolbar::app_bar(self, ui);
         }
         app_bar_custom::shield(self, ui.ctx());
@@ -4686,6 +4687,9 @@ impl SolveApp {
         crate::sketch_view::show_notice(self, ui);
         view_tiles::placement_overlay(self, ui.ctx());
         self.resolve_fit(ui.ctx());
+        if self.preferences.tablet_ui && !self.home.open {
+            tablet_ui::show(self, ui);
+        }
         panel_runtime::finish_app_host(self, ui);
         if view_tiles::focus_pressed(self) {
             ui.ctx().request_repaint();

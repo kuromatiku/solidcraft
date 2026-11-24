@@ -140,6 +140,24 @@ fn show_top_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut 
                                 app.start_pinned("sketch.cancel", None);
                             }
                         }
+                    } else if let Some(d) = &app.dialog {
+                        let title = if d.press_pull { "🚀 Press-Pull".to_string() } else { format!("🛠️ {}", crate::dialogs::report_title(d)) };
+                        ui.colored_label(Color32::from_rgb(0x38, 0xbd, 0xf8), title);
+
+                        // Done / Commit Button
+                        let done_btn = egui::Button::new(egui::RichText::new("✓ Done").color(Color32::WHITE).strong())
+                            .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
+                            .min_size(vec2(75.0, 36.0));
+                        if ui.add(done_btn).backing_on_hover_text("Commit and Apply changes").clicked() {
+                            crate::dialogs::confirm(app);
+                        }
+
+                        // Cancel Button
+                        let cancel_btn =
+                            egui::Button::new(egui::RichText::new("✕ Cancel").color(t.text_dim)).fill(t.panel).min_size(vec2(70.0, 36.0));
+                        if ui.add(cancel_btn).backing_on_hover_text("Discard changes").clicked() {
+                            crate::dialogs::cancel(app);
+                        }
                     } else {
                         ui.colored_label(t.text, "📦 3D Part Modeling");
                     }

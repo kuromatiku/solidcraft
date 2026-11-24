@@ -5776,13 +5776,19 @@ pub(crate) fn dialog_pick(app: &mut SolveApp, hit: &Hit, sel: Sel) {
     }
     // Press Pull's first pick of a curved face, a chamfer's face or an edge reopens it as an
     // offset, the chamfer or a fillet.
+    let tablet_switch = app.preferences.tablet_ui
+        && app.dialog.as_mut().and_then(|d| d.primary()).is_some_and(|(_, _, val)| {
+            let t = val.trim();
+            t.is_empty() || t == "0 mm" || t == "0" || t == "0.0 mm" || t == "0.0"
+        });
     if let Some(d) = &app.dialog
         && d.press_pull
-        && d.inputs.first().is_some_and(|i| i.items.is_empty())
+        && (d.inputs.first().is_some_and(|i| i.items.is_empty()) || tablet_switch)
         && match &sel {
-            Sel::Edge { .. } => true,
+            Sel::Edge { .. } | Sel::Profile { .. } => true,
             Sel::Face { body, index, .. } => {
-                crate::dialogs::planar_face(&app.session, body, *index).is_none()
+                tablet_switch
+                    || crate::dialogs::planar_face(&app.session, body, *index).is_none()
                     || crate::dialogs::blend_feature(&app.session, body, *index).is_some()
             }
             _ => false,
@@ -8059,6 +8065,21 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
                         dialog_pick(app, &hit, sel);
                     }
                 } else if let Some(mut dialog) = app.dialog.take() {
+                    if app.preferences.tablet_ui && dialog.press_pull {
+                        let is_modified = dialog.primary().is_some_and(|(_, _, val)| {
+                            let t = val.trim();
+                            !t.is_empty() && t != "0 mm" && t != "0" && t != "0.0 mm" && t != "0.0"
+                        });
+                        if is_modified {
+                            dialog.confirm = true;
+                            app.dialog = Some(dialog);
+                        } else {
+                            app.dialog = Some(dialog);
+                            crate::dialogs::cancel(app);
+                            select(app, None, false, false);
+                        }
+                        return;
+                    }
                     // A pick field clicked into says what it is for when the click is not one (#10428).
                     if dialog.awaiting_pick {
                         dialog.pick_refused = dialog.active_input().and_then(|i| i.tip);
@@ -8110,7 +8131,16 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
                             // A pen tap on geometry toggles it. A tap on empty space clears.
                             let (add, allow_toggle) = if pen_select { (sel.is_some(), true) } else { (add, allow_toggle) };
                             select(app, sel.clone(), add, allow_toggle);
-                            crate::select_other::note_click(app, p, if add || pen_select { None } else { sel });
+                            crate::select_other::note_click(app, p, if add || pen_select { None } else { sel.clone() });
+                            if app.preferences.tablet_ui && !add && app.session.active_sketch.is_none() && app.tool.is_none() && app.dialog.is_none()
+                            {
+                                if let Some(s) = &sel {
+                                    if matches!(s, Sel::Face { .. } | Sel::Edge { .. } | Sel::Profile { .. }) {
+                                        app.session.selection = vec![s.clone()];
+                                        app.start("solid.press_pull");
+                                    }
+                                }
+                            }
                         }
                     }
                 }

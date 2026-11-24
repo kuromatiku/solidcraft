@@ -651,7 +651,8 @@ pub fn refine_snap(
     // Millimetres per pixel here.
     let (a, b) = (proj.to_screen(plane.to_world(lp))?, proj.to_screen(plane.to_world(lp + Vec2::X))?);
     let px = 1.0 / (a.distance(b) as f64).max(1e-9);
-    let tol = 7.0 * px;
+    let snap_px = if app.preferences.tablet_ui { 20.0 } else { 7.0 };
+    let tol = snap_px * px;
     // A model vertex under the cursor: drawing on it projects it into the sketch.
     // A snap point of a model edge or another sketch's curve (#11229) is one too: an end of a
     // body's edge is a vertex, projected and linked like one; a centre or a middle (and a point
@@ -2291,12 +2292,19 @@ fn snap_hint(app: &SolveApp, painter: &egui::Painter, proj: &Proj) {
         painter.add(egui::Shape::dashed_line(&[from, sp], Stroke::new(1.0, tk.rubber_band), 5.0, 4.0));
     }
     crate::scenario::publish_count("sketch_align_guides", guides.len() as f64);
-    let r = egui::Rect::from_min_size(sp + egui::vec2(12.0, -24.0), egui::vec2(24.0, 14.0));
+    // Visual snap indicator on tablet: crisp tactile snap target ring
+    if app.preferences.tablet_ui {
+        painter.circle_stroke(sp, 10.0, Stroke::new(2.5, tk.accent));
+        painter.circle_filled(sp, 3.5, tk.accent);
+    }
+    let (badge_size, font_size) =
+        if app.preferences.tablet_ui { (egui::vec2(32.0, 18.0), tk.font_small) } else { (egui::vec2(24.0, 14.0), tk.font_micro) };
+    let r = egui::Rect::from_min_size(sp + egui::vec2(12.0, -24.0), badge_size);
     // The tool at the cursor sits in the same corner of the pointer (#15391).
     let r = crate::tool_cursor::clear_of_badge(app, painter, proj.rect, r);
     crate::scenario::publish_rect("viewport:snap_hint", r);
     painter.rect_filled(r, tk.radius_sm.saturating_sub(1), tk.accent_soft);
-    painter.text(r.center(), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(solidcraft_theme::Tokens::get().font_micro), tk.text);
+    painter.text(r.center(), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(font_size), tk.text);
 }
 
 /// Per frame, after the viewport is drawn: constraint glyphs, snap hints and analysis marks.

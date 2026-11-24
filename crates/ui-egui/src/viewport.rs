@@ -8001,18 +8001,22 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
         // Rectangles, circles and polygons also draw by press, drag and release (#1630): the press
         // places the first point as a click there would, the release the second. So does a line
         // with Preferences › Sketch › "Press and drag draws one line" (#7247).
-        let line_drag = app.preferences.line_drag_draws_one;
+        let line_drag = app.preferences.line_drag_draws_one || app.preferences.tablet_ui;
         let two_point_start = app
             .tool
             .as_ref()
             .is_some_and(|t| t.pts.is_empty() && (matches!(t.kind, crate::tools::Kind::Draw(2)) || (line_drag && t.cmd == "sketch.line")));
-        if two_point_start
+        let tablet_sketch_drag = app.preferences.tablet_ui && app.tool.is_none() && app.session.active_sketch.is_some();
+        if (two_point_start || tablet_sketch_drag)
             && !held
             && primary_nav.is_none()
             && mode.is_none()
             && resp.drag_started_by(egui::PointerButton::Primary)
             && let Some(a) = ui.input(|i| i.pointer.press_origin())
         {
+            if tablet_sketch_drag {
+                app.start("sketch.line");
+            }
             crate::tools::on_click(app, &proj, a, mods.shift);
             app.viewport.draw_drag = app.tool.as_ref().is_some_and(|t| t.pts.len() == 1).then_some(a);
         } else if app.tool.is_some()

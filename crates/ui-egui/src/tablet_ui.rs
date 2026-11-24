@@ -144,6 +144,17 @@ fn show_top_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut 
                         let title = if d.press_pull { "🚀 Press-Pull".to_string() } else { format!("🛠️ {}", crate::dialogs::report_title(d)) };
                         ui.colored_label(Color32::from_rgb(0x38, 0xbd, 0xf8), title);
 
+                        // Quick 'Sketch on Face' button when a face is being pulled
+                        if d.press_pull {
+                            let sketch_face_btn = egui::Button::new(egui::RichText::new("✏️ Sketch on Face").color(Color32::WHITE).strong())
+                                .fill(Color32::from_rgb(0x02, 0x84, 0xc7))
+                                .min_size(vec2(125.0, 36.0));
+                            if ui.add(sketch_face_btn).backing_on_hover_text("Open 2D sketch on this planar face").clicked() {
+                                crate::dialogs::cancel(app);
+                                app.start("sketch.create");
+                            }
+                        }
+
                         // Done / Commit Button
                         let done_btn = egui::Button::new(egui::RichText::new("✓ Done").color(Color32::WHITE).strong())
                             .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
@@ -157,6 +168,19 @@ fn show_top_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut 
                             egui::Button::new(egui::RichText::new("✕ Cancel").color(t.text_dim)).fill(t.panel).min_size(vec2(70.0, 36.0));
                         if ui.add(cancel_btn).backing_on_hover_text("Discard changes").clicked() {
                             crate::dialogs::cancel(app);
+                        }
+                    } else if app
+                        .session
+                        .selection
+                        .first()
+                        .is_some_and(|s| matches!(s, solidcraft_engine::Sel::Face { .. } | solidcraft_engine::Sel::Plane { .. }))
+                    {
+                        ui.colored_label(Color32::from_rgb(0x38, 0xbd, 0xf8), "📐 Face / Plane Picked");
+                        let sketch_face_btn = egui::Button::new(egui::RichText::new("✏️ Sketch on Face").color(Color32::WHITE).strong())
+                            .fill(Color32::from_rgb(0x02, 0x84, 0xc7))
+                            .min_size(vec2(125.0, 36.0));
+                        if ui.add(sketch_face_btn).backing_on_hover_text("Open 2D sketch on this planar face").clicked() {
+                            app.start("sketch.create");
                         }
                     } else {
                         ui.colored_label(t.text, "📦 3D Part Modeling");
@@ -253,16 +277,16 @@ fn show_tool_dock(app: &mut SolveApp, ctx: &egui::Context, screen: Rect) {
         &[
             DockTool { cmd: "sketch.line", icon: "line", label: "Line" },
             DockTool { cmd: "sketch.rectangle.two_point", icon: "rect", label: "Rectangle" },
-            DockTool { cmd: "sketch.circle", icon: "circle", label: "Circle" },
-            DockTool { cmd: "sketch.arc", icon: "arc", label: "Arc" },
-            DockTool { cmd: "sketch.spline", icon: "spline", label: "Spline" },
-            DockTool { cmd: "sketch.dim", icon: "dimension", label: "Dimension" },
+            DockTool { cmd: "sketch.circle.center", icon: "circle", label: "Circle" },
+            DockTool { cmd: "sketch.arc.three_point", icon: "arc", label: "Arc" },
+            DockTool { cmd: "sketch.spline.fit_point", icon: "spline", label: "Spline" },
+            DockTool { cmd: "sketch.dimension", icon: "dimension", label: "Dimension" },
             DockTool { cmd: "sketch.trim", icon: "trim", label: "Trim" },
             DockTool { cmd: "sketch.offset", icon: "offset", label: "Offset" },
         ]
     } else {
         &[
-            DockTool { cmd: "sketch.new", icon: "sketch", label: "New Sketch" },
+            DockTool { cmd: "sketch.create", icon: "sketch", label: "New Sketch" },
             DockTool { cmd: "solid.extrude", icon: "extrude", label: "Extrude" },
             DockTool { cmd: "solid.revolve", icon: "revolve", label: "Revolve" },
             DockTool { cmd: "solid.fillet", icon: "fillet", label: "Fillet" },

@@ -5776,19 +5776,59 @@ pub(crate) fn dialog_pick(app: &mut SolveApp, hit: &Hit, sel: Sel) {
     }
     // Press Pull's first pick of a curved face, a chamfer's face or an edge reopens it as an
     // offset, the chamfer or a fillet.
-    let tablet_switch = app.preferences.tablet_ui
-        && app.dialog.as_mut().and_then(|d| d.primary()).is_some_and(|(_, _, val)| {
-            let t = val.trim();
-            t.is_empty() || t == "0 mm" || t == "0" || t == "0.0 mm" || t == "0.0"
-        });
+    if app.preferences.tablet_ui {
+        let cmd = app.dialog.as_ref().and_then(|d| d.command());
+        let is_fillet_chamfer = matches!(cmd, Some("solid.fillet" | "solid.chamfer"));
+        let is_press_pull = app.dialog.as_ref().is_some_and(|d| d.press_pull) || matches!(cmd, Some("solid.press_pull" | "solid.extrude"));
+
+        // 1. Tapping a Face while Fillet/Chamfer is open: switch to Press/Pull immediately!
+        if is_fillet_chamfer && matches!(&sel, Sel::Face { .. } | Sel::Profile { .. }) {
+            crate::dialogs::cancel(app);
+            app.session.selection = vec![sel];
+            app.start("solid.press_pull");
+            return;
+        }
+
+        // 2. Tapping an Edge while Press/Pull is open: switch to Fillet immediately!
+        if is_press_pull && matches!(&sel, Sel::Edge { .. }) {
+            crate::dialogs::cancel(app);
+            app.session.selection = vec![sel];
+            app.start("solid.fillet");
+            return;
+        }
+
+        // 3. Tapping another Edge while Fillet/Chamfer has 1 edge: re-target to the tapped edge!
+        if is_fillet_chamfer && matches!(&sel, Sel::Edge { .. }) {
+            let single_item = app.dialog.as_ref().and_then(|d| d.inputs.first()).is_some_and(|i| i.items.len() <= 1);
+            if single_item {
+                crate::dialogs::cancel(app);
+                app.session.selection = vec![sel];
+                app.start(cmd.unwrap_or("solid.fillet"));
+                return;
+            }
+        }
+
+        // 4. Tapping another Face while Press/Pull is untouched: re-target to the tapped face!
+        if is_press_pull && matches!(&sel, Sel::Face { .. } | Sel::Profile { .. }) {
+            let untouched = app.dialog.as_mut().and_then(|d| d.primary()).is_some_and(|(_, _, val)| {
+                let t = val.trim();
+                t.is_empty() || t == "0 mm" || t == "0" || t == "0.0 mm" || t == "0.0"
+            });
+            if untouched {
+                crate::dialogs::cancel(app);
+                app.session.selection = vec![sel];
+                app.start("solid.press_pull");
+                return;
+            }
+        }
+    }
     if let Some(d) = &app.dialog
         && d.press_pull
-        && (d.inputs.first().is_some_and(|i| i.items.is_empty()) || tablet_switch)
+        && d.inputs.first().is_some_and(|i| i.items.is_empty())
         && match &sel {
             Sel::Profile { .. } => true,
             Sel::Face { body, index, .. } => {
-                tablet_switch
-                    || crate::dialogs::planar_face(&app.session, body, *index).is_none()
+                crate::dialogs::planar_face(&app.session, body, *index).is_none()
                     || crate::dialogs::blend_feature(&app.session, body, *index).is_some()
             }
             _ => false,
@@ -8069,10 +8109,12 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
                         dialog_pick(app, &hit, sel);
                     }
                 } else if let Some(mut dialog) = app.dialog.take() {
-                    if app.preferences.tablet_ui && dialog.press_pull {
+                    let is_direct =
+                        dialog.press_pull || dialog.command().is_some_and(|c| matches!(c, "solid.fillet" | "solid.chamfer" | "solid.extrude"));
+                    if app.preferences.tablet_ui && is_direct {
                         let is_modified = dialog.primary().is_some_and(|(_, _, val)| {
                             let t = val.trim();
-                            !t.is_empty() && t != "0 mm" && t != "0" && t != "0.0 mm" && t != "0.0"
+                            !t.is_empty() && t != "0 mm" && t != "0" && t != "0.0 mm" && t != "0.0" && t != "1 mm" && t != "2 mm"
                         });
                         if is_modified {
                             dialog.confirm = true;
@@ -8126,7 +8168,7 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
                             // A pen's tap picks where it lifted: Safari's touch end clears the
                             // hover in the same frame as the release, before this click is read.
                             let sel = match cand.and_then(|c| c.1) {
-                                None if pen_select => {
+                                None if pen_select || app.preferences.tablet_ui => {
                                     let hits = pick_cached(app, &proj, p);
                                     candidate(app, &hits).map(|(_, s)| s)
                                 }
@@ -8136,20 +8178,33 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
                             let (add, allow_toggle) = if pen_select { (sel.is_some(), true) } else { (add, allow_toggle) };
                             select(app, sel.clone(), add, allow_toggle);
                             crate::select_other::note_click(app, p, if add || pen_select { None } else { sel.clone() });
-                            if app.preferences.tablet_ui && !add && app.session.active_sketch.is_none() && app.tool.is_none() && app.dialog.is_none()
+                            if app.preferences.tablet_ui
+                                && !held_mods.shift
+                                && app.session.active_sketch.is_none()
+                                && app.tool.is_none()
+                                && app.dialog.is_none()
                             {
                                 if let Some(s) = &sel {
-                                    if matches!(s, Sel::Face { .. } | Sel::Profile { .. }) {
-                                        app.session.selection = vec![s.clone()];
-                                        app.start("solid.press_pull");
-                                    } else if let Sel::ExternalSketchCurve { sketch, .. } = s {
-                                        let n = crate::open_meshing::session_world(&app.session).sketch(*sketch).map_or(0, |sk| sk.profiles.len());
-                                        if n > 0 {
-                                            let items: Vec<serde_json::Value> =
-                                                (0..n).map(|i| serde_json::json!({"type": "profile", "sketch": sketch, "index": i})).collect();
-                                            let _ = app.run("select.set", serde_json::json!({ "items": items }));
-                                            app.start("solid.extrude");
+                                    match s {
+                                        Sel::Face { .. } | Sel::Profile { .. } => {
+                                            app.session.selection = vec![s.clone()];
+                                            app.start("solid.press_pull");
                                         }
+                                        Sel::Edge { .. } => {
+                                            app.session.selection = vec![s.clone()];
+                                            app.start("solid.fillet");
+                                        }
+                                        Sel::ExternalSketchCurve { sketch, .. } => {
+                                            let n =
+                                                crate::open_meshing::session_world(&app.session).sketch(*sketch).map_or(0, |sk| sk.profiles.len());
+                                            if n > 0 {
+                                                let items: Vec<serde_json::Value> =
+                                                    (0..n).map(|i| serde_json::json!({"type": "profile", "sketch": sketch, "index": i})).collect();
+                                                let _ = app.run("select.set", serde_json::json!({ "items": items }));
+                                                app.start("solid.extrude");
+                                            }
+                                        }
+                                        _ => {}
                                     }
                                 }
                             }

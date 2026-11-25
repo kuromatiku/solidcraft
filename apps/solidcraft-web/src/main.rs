@@ -1488,6 +1488,7 @@ mod web {
                             app.preferences.pencil_mode = true;
                             app.preferences.view_confirm_corner = true;
                             app.preferences.tablet_ui = true;
+                            app.preferences.radial_context_menu = true;
                             app.ui.show_browser = false;
                             app.ui.show_timeline = false;
                             cc.egui_ctx.global_style_mut(|style| {

@@ -878,7 +878,7 @@ fn handle_input(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &egui::
     }
 
     // Pencil mode assigns finger gestures to navigation even when the separate preference is off.
-    let touch_enabled = (app.preferences.touchscreen_navigation || app.preferences.pencil_mode)
+    let touch_enabled = (app.preferences.touchscreen_navigation || app.preferences.pencil_mode || app.preferences.tablet_ui)
         && app.tool.is_none()
         && app.dialog.is_none()
         && app.viewport.context_menu.is_none();

@@ -3154,12 +3154,20 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         let area = Rect::from_center_size(c, vec2(2.0 * (RX + 4.0), 2.0 * (RY + 4.0)));
         inside |= pointer.is_some_and(|p| area.contains(p));
         let hot = pointer.and_then(|p| sector(p - c));
+        let center_dismiss = ctx.input(|i| {
+            (i.pointer.primary_clicked() || i.pointer.button_released(egui::PointerButton::Primary))
+                && i.pointer.interact_pos().or_else(|| i.pointer.latest_pos()).is_some_and(|p| p.distance(c) < 50.0)
+        });
+        if center_dismiss {
+            close(app);
+            return;
+        }
         let resp = Container::new(ctx, Surface::Popup)
             .area(egui::Id::unique("sc_marking_menu"))
             .fixed_pos(area.min)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
-                let _ = ui.allocate_exact_size(area.size(), Sense::hover());
+                let _ = ui.allocate_exact_size(area.size(), Sense::click());
                 picked = crate::ui_kit::radial_menu(ui, c, &radial, hot).or(picked.take());
             });
         inside |= resp.response.contains_pointer();

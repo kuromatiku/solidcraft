@@ -8377,7 +8377,7 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
                     if let (Some(start), Some(origin)) = (i.pointer.press_start_time(), i.pointer.press_origin()) {
                         let duration = i.time - start;
                         let dist = i.pointer.latest_pos().map_or(0.0, |pos| (pos - origin).length());
-                        return duration >= 0.45 && dist < 12.0;
+                        return duration >= 0.38 && dist < 24.0;
                     }
                 }
                 false
@@ -8385,6 +8385,7 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
             if is_long_press {
                 if let Some(origin) = ui.input(|i| i.pointer.press_origin()) {
                     app.menu.radial = true;
+                    app.menu.flick = true;
                     crate::context_menu::open(app, origin, held_mods);
                 }
             }

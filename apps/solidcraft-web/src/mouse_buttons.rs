@@ -361,7 +361,8 @@ mod web {
             let tracker = tracker.clone();
             listen(
                 "contextmenu",
-                Box::new(move |_e: web_sys::Event| {
+                Box::new(move |e: web_sys::Event| {
+                    e.prevent_default();
                     tracker.borrow_mut().note_menu();
                 }),
             );

@@ -86,12 +86,22 @@ pub(crate) struct Fingers {
     contacts: Vec<Contact>,
     /// More than one finger was down during this touch: it is a gesture, not a tap.
     several: bool,
+    /// Maximum simultaneous contacts in the current touch cluster.
+    max_contacts: usize,
+    /// Whether any contact in the current cluster moved beyond tap slop.
+    any_moved: bool,
+    /// Timestamp when the first contact went down.
+    touch_start: f64,
     /// The last finger tap in the view: where and when it ended.
     last_tap: Option<(Pos2, f64)>,
     /// The last pen tap in the view, for pen double-tap selection.
     pub(crate) last_pen_tap: Option<(Pos2, f64)>,
     /// A finger double-tap in the view, for the viewport to act on.
     pub(crate) double_tap: Option<Pos2>,
+    /// Two-finger tap detected (standard iPad Undo gesture).
+    pub(crate) two_finger_tap: bool,
+    /// Three-finger tap detected (standard iPad Redo gesture).
+    pub(crate) three_finger_tap: bool,
     /// Touches that are a pen's, not a finger's: they are left out of the frame.
     pens: Vec<egui::TouchId>,
 }
@@ -115,7 +125,7 @@ fn in_view(app: &SolveApp, ctx: &egui::Context, p: Pos2) -> bool {
 /// Does nothing with Pencil mode off.
 pub(crate) fn filter(app: &mut SolveApp, ctx: &egui::Context, raw: &mut RawInput, taps: &PlatformTaps) {
     let finger_down = taps.finger_down;
-    if !app.preferences.pencil_mode {
+    if !app.preferences.pencil_mode && !app.preferences.tablet_ui {
         app.viewport.fingers = Fingers::default();
         return;
     }
@@ -156,6 +166,9 @@ pub(crate) fn filter(app: &mut SolveApp, ctx: &egui::Context, raw: &mut RawInput
             TouchPhase::Start => {
                 if fingers.contacts.is_empty() {
                     fingers.several = false;
+                    fingers.max_contacts = 1;
+                    fingers.any_moved = false;
+                    fingers.touch_start = now;
                     if starts_in_view {
                         if !fingers.holding {
                             fingers.held_since = now;
@@ -164,6 +177,7 @@ pub(crate) fn filter(app: &mut SolveApp, ctx: &egui::Context, raw: &mut RawInput
                     }
                 } else {
                     fingers.several = true;
+                    fingers.max_contacts = fingers.max_contacts.max(fingers.contacts.len() + 1);
                 }
                 if pos.is_finite() && fingers.contacts.len() < MAX_CONTACTS && !fingers.contacts.iter().any(|c| c.device == device && c.id == id) {
                     fingers.contacts.push(Contact { device, id, start: pos, at: pos, since: now, moved: false });
@@ -173,9 +187,13 @@ pub(crate) fn filter(app: &mut SolveApp, ctx: &egui::Context, raw: &mut RawInput
                 if let Some(c) = fingers.contacts.iter_mut().find(|c| c.device == device && c.id == id)
                     && pos.is_finite()
                 {
-                    c.moved |=
+                    let moved =
                         solidcore_ops::point_distance([f64::from(pos.x), f64::from(pos.y), 0.0], [f64::from(c.start.x), f64::from(c.start.y), 0.0])
                             .map_or(true, |distance| distance.value > f64::from(TAP_SLOP));
+                    c.moved |= moved;
+                    if moved {
+                        fingers.any_moved = true;
+                    }
                     c.at = pos;
                 }
             }
@@ -183,6 +201,9 @@ pub(crate) fn filter(app: &mut SolveApp, ctx: &egui::Context, raw: &mut RawInput
                 let Some(i) = fingers.contacts.iter().position(|c| c.device == device && c.id == id) else { continue };
                 let c = fingers.contacts.remove(i);
                 let end = if pos.is_finite() { pos } else { c.at };
+                if phase == TouchPhase::Cancel {
+                    fingers.any_moved = true;
+                }
                 let tap = phase == TouchPhase::End
                     && fingers.holding
                     && !fingers.several
@@ -198,6 +219,19 @@ pub(crate) fn filter(app: &mut SolveApp, ctx: &egui::Context, raw: &mut RawInput
                 } else {
                     // A drag, a hold or a gesture between two taps: they are not a double-tap.
                     fingers.last_tap = None;
+                }
+                // Multi-finger tap detection (2-finger tap = Undo, 3-finger tap = Redo)
+                if phase == TouchPhase::End
+                    && fingers.holding
+                    && fingers.contacts.is_empty()
+                    && !fingers.any_moved
+                    && now - fingers.touch_start <= TAP_TIME
+                {
+                    if fingers.max_contacts == 2 {
+                        fingers.two_finger_tap = true;
+                    } else if fingers.max_contacts == 3 {
+                        fingers.three_finger_tap = true;
+                    }
                 }
             }
         }
@@ -229,6 +263,8 @@ pub(crate) fn filter(app: &mut SolveApp, ctx: &egui::Context, raw: &mut RawInput
     if lifted || orphaned {
         fingers.holding = false;
         fingers.several = false;
+        fingers.max_contacts = 0;
+        fingers.any_moved = false;
     }
 }
 

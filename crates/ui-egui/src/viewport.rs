@@ -8178,36 +8178,6 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
                             let (add, allow_toggle) = if pen_select { (sel.is_some(), true) } else { (add, allow_toggle) };
                             select(app, sel.clone(), add, allow_toggle);
                             crate::select_other::note_click(app, p, if add || pen_select { None } else { sel.clone() });
-                            if app.preferences.tablet_ui
-                                && !held_mods.shift
-                                && app.session.active_sketch.is_none()
-                                && app.tool.is_none()
-                                && app.dialog.is_none()
-                            {
-                                if let Some(s) = &sel {
-                                    match s {
-                                        Sel::Face { .. } | Sel::Profile { .. } => {
-                                            app.session.selection = vec![s.clone()];
-                                            app.start("solid.press_pull");
-                                        }
-                                        Sel::Edge { .. } => {
-                                            app.session.selection = vec![s.clone()];
-                                            app.start("solid.fillet");
-                                        }
-                                        Sel::ExternalSketchCurve { sketch, .. } => {
-                                            let n =
-                                                crate::open_meshing::session_world(&app.session).sketch(*sketch).map_or(0, |sk| sk.profiles.len());
-                                            if n > 0 {
-                                                let items: Vec<serde_json::Value> =
-                                                    (0..n).map(|i| serde_json::json!({"type": "profile", "sketch": sketch, "index": i})).collect();
-                                                let _ = app.run("select.set", serde_json::json!({ "items": items }));
-                                                app.start("solid.extrude");
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
                         }
                     }
                 }
@@ -8227,7 +8197,8 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
         } else {
             false
         };
-        if pen_select
+        if !app.preferences.tablet_ui
+            && pen_select
             && (resp.double_clicked() || pen_double)
             && !held
             && app.tool.is_none()
@@ -8315,10 +8286,16 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
             && app.dialog.is_none()
             && crate::sketch_view::active_sketch(app).is_none()
         {
-            let before = app.settled_cam();
             let mut created = false;
             let mut target_pt = None;
-            match app.viewport.hover.clone() {
+            let hit = match app.viewport.hover.clone() {
+                Some(hit) => Some(hit),
+                None => {
+                    let hits = pick_cached(app, &proj, p);
+                    candidate(app, &hits).map(|(hit, _)| hit)
+                }
+            };
+            match hit {
                 Some(Hit::Face { point, .. }) => {
                     if app.run("sketch.create", json!({ "plane": { "face": [point.x, point.y, point.z] } })).is_ok() {
                         created = true;
@@ -8350,22 +8327,15 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
                 }
             }
             if created {
-                let turned = app.look_at_opened_sketch(before);
-                if !turned {
-                    crate::dialogs::look_at_sketch(app);
-                }
-                if let Some(point) = target_pt
-                    && let Some(view) = app.session.sketching_view
-                {
-                    let _ = crate::documents::with_sketch_camera(app, view, |app| {
-                        let mut to = app.settled_cam();
-                        to.target = point;
-                        app.sketch_camera_target = Some(to);
-                        app.animate_to(to);
-                        if let Some(pre) = &mut app.pre_sketch_cam {
-                            pre.facing = to;
-                        }
-                    });
+                crate::dialogs::look_at_sketch(app);
+                if let Some(point) = target_pt {
+                    let mut to = app.settled_cam();
+                    to.target = point;
+                    app.sketch_camera_target = Some(to);
+                    app.animate_to(to);
+                    if let Some(pre) = &mut app.pre_sketch_cam {
+                        pre.facing = to;
+                    }
                 }
             }
         }
@@ -8433,6 +8403,15 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
                     crate::context_menu::open(app, origin, held_mods);
                 }
             }
+        }
+        // Multi-touch gestures (standard iPad: 2 fingers = Undo, 3 fingers = Redo)
+        if app.viewport.fingers.two_finger_tap {
+            app.viewport.fingers.two_finger_tap = false;
+            let _ = app.run("edit.undo", json!({}));
+        }
+        if app.viewport.fingers.three_finger_tap {
+            app.viewport.fingers.three_finger_tap = false;
+            let _ = app.run("edit.redo", json!({}));
         }
     }
     // Dragging a sketch point of the active sketch moves it; the solver keeps the constraints.

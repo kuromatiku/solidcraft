@@ -63,6 +63,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     show_top_bar(app, &ctx, screen, &mut st);
     show_tool_dock(app, &ctx, screen, &mut st);
     show_bottom_action_bar(app, &ctx, screen);
+    show_bottom_left_bar(app, &ctx, screen);
     if st.show_project_menu {
         show_project_menu(app, &ctx, screen, &mut st);
     }
@@ -106,35 +107,6 @@ fn show_top_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut 
                     st.show_project_menu = !st.show_project_menu;
                     st.expanded_dock_group = None;
                     st.show_views_menu = false;
-                }
-
-                // Divider
-                let (div_rect, _) = ui.allocate_exact_size(vec2(1.0, 24.0), Sense::hover());
-                ui.painter().rect_filled(div_rect, 0.0, t.border);
-                ui.add_space(2.0);
-
-                // Undo Button
-                let can_undo = !app.session.undo.is_empty();
-                let (undo_rect, _) = ui.allocate_exact_size(vec2(TOUCH_TARGET, TOUCH_TARGET), Sense::click());
-                let undo_resp = ui.interact(undo_rect, ui.scope_id().with("tablet_undo"), if can_undo { Sense::click() } else { Sense::hover() });
-                if can_undo && undo_resp.hovered() {
-                    ui.painter().rect_filled(undo_rect, t.radius_md, t.hover);
-                }
-                crate::icons::paint_icon(ui.painter(), undo_rect.shrink(t.space_8), "undo", if can_undo { 1.0 } else { 0.3 });
-                if undo_resp.backing_on_hover_text("Undo (↩)").clicked() && can_undo {
-                    let _ = app.run("edit.undo", json!({}));
-                }
-
-                // Redo Button
-                let can_redo = !app.session.redo.is_empty();
-                let (redo_rect, _) = ui.allocate_exact_size(vec2(TOUCH_TARGET, TOUCH_TARGET), Sense::click());
-                let redo_resp = ui.interact(redo_rect, ui.scope_id().with("tablet_redo"), if can_redo { Sense::click() } else { Sense::hover() });
-                if can_redo && redo_resp.hovered() {
-                    ui.painter().rect_filled(redo_rect, t.radius_md, t.hover);
-                }
-                crate::icons::paint_icon(ui.painter(), redo_rect.shrink(t.space_8), "redo", if can_redo { 1.0 } else { 0.3 });
-                if redo_resp.backing_on_hover_text("Redo (↪)").clicked() && can_redo {
-                    let _ = app.run("edit.redo", json!({}));
                 }
             });
         });
@@ -963,5 +935,83 @@ fn show_bottom_action_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect)
         if !crate::toolbar::cancel_unfinished(app) {
             app.start_pinned("sketch.cancel", None);
         }
+    }
+}
+
+/// Floating Bottom-Left Bar: Undo, Redo, and Quick Radial Menu (Ergonomic left thumb reach)
+fn show_bottom_left_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect) {
+    let t = Tokens::get();
+    let container = Container::new(ctx, Surface::Navigation);
+    let bar_pos = pos2(16.0, screen.bottom() - 36.0);
+
+    let can_undo = !app.session.undo.is_empty();
+    let can_redo = !app.session.redo.is_empty();
+
+    let mut do_undo = false;
+    let mut do_redo = false;
+    let mut do_quick_menu = false;
+
+    container.area(egui::Id::unique("tablet_bottom_left")).order(egui::Order::Middle).pivot(Align2::LEFT_BOTTOM).fixed_pos(bar_pos).show(ctx, |ui| {
+        let frame = container.frame(ctx, t.overlay, crate::frame::Side::Left).inner_margin(egui::Margin::symmetric(8, 4));
+        container.show_frame(ui, frame, screen, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
+
+                // Undo Button
+                let (undo_rect, _) = ui.allocate_exact_size(vec2(TOUCH_TARGET, 34.0), Sense::click());
+                let undo_resp = ui.interact(undo_rect, ui.scope_id().with("tablet_bl_undo"), if can_undo { Sense::click() } else { Sense::hover() });
+                if can_undo && undo_resp.hovered() {
+                    ui.painter().rect_filled(undo_rect, t.radius_md, t.hover);
+                }
+                crate::icons::paint_icon(ui.painter(), undo_rect.shrink(t.space_8), "undo", if can_undo { 1.0 } else { 0.3 });
+                if undo_resp.backing_on_hover_text("Undo (↩) / Tap 2 Jari").clicked() && can_undo {
+                    do_undo = true;
+                }
+
+                // Redo Button
+                let (redo_rect, _) = ui.allocate_exact_size(vec2(TOUCH_TARGET, 34.0), Sense::click());
+                let redo_resp = ui.interact(redo_rect, ui.scope_id().with("tablet_bl_redo"), if can_redo { Sense::click() } else { Sense::hover() });
+                if can_redo && redo_resp.hovered() {
+                    ui.painter().rect_filled(redo_rect, t.radius_md, t.hover);
+                }
+                crate::icons::paint_icon(ui.painter(), redo_rect.shrink(t.space_8), "redo", if can_redo { 1.0 } else { 0.3 });
+                if redo_resp.backing_on_hover_text("Redo (↪) / Tap 3 Jari").clicked() && can_redo {
+                    do_redo = true;
+                }
+
+                // Divider
+                let (div_rect, _) = ui.allocate_exact_size(vec2(1.0, 20.0), Sense::hover());
+                ui.painter().rect_filled(div_rect, 0.0, t.border);
+
+                // Quick Radial Menu trigger (alternative for Pencil Pro squeeze / long-press)
+                let (quick_rect, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::click());
+                let quick_resp = ui.interact(quick_rect, ui.scope_id().with("tablet_bl_quick_menu"), Sense::click());
+                if quick_resp.hovered() {
+                    ui.painter().rect_filled(quick_rect, t.radius_md, t.hover);
+                }
+                ui.painter().text(
+                    quick_rect.center(),
+                    Align2::CENTER_CENTER,
+                    "⚡",
+                    egui::FontId::proportional(15.0),
+                    Color32::from_rgb(0xfb, 0xbf, 0x24),
+                );
+                if quick_resp.backing_on_hover_text("Menu Cepat / Radial Marking Menu (Pengganti Pencil Squeeze)").clicked() {
+                    do_quick_menu = true;
+                }
+            });
+        });
+    });
+
+    if do_undo {
+        let _ = app.run("edit.undo", json!({}));
+    }
+    if do_redo {
+        let _ = app.run("edit.redo", json!({}));
+    }
+    if do_quick_menu {
+        app.menu.radial = true;
+        let menu_pos = pos2(screen.center().x, screen.center().y);
+        crate::context_menu::open(app, menu_pos, crate::tool_modifiers::Held::default());
     }
 }

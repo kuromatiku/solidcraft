@@ -1489,6 +1489,7 @@ mod web {
                             app.preferences.view_confirm_corner = true;
                             app.preferences.tablet_ui = true;
                             app.preferences.radial_context_menu = true;
+                            app.preferences.keep_unsaved_in_browser = true;
                             app.ui.show_browser = false;
                             app.ui.show_timeline = false;
                             cc.egui_ctx.global_style_mut(|style| {

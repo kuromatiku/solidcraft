@@ -322,6 +322,11 @@ fn show_project_menu(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: 
                     crate::toolbar::FileAction::New.run(app);
                     st.show_project_menu = false;
                 }
+                if ui.add(egui::Button::new("📦 Contoh Part (Sample Plate)").min_size(vec2(240.0, 36.0))).clicked() {
+                    crate::toolbar::FileAction::New.run(app);
+                    let _ = app.session.run_script(&solidcraft_engine::sample::script());
+                    st.show_project_menu = false;
+                }
                 if ui.add(egui::Button::new("📂 Buka Desain (Open)").min_size(vec2(240.0, 36.0))).clicked() {
                     crate::toolbar::FileAction::Open.run(app);
                     st.show_project_menu = false;
@@ -919,6 +924,15 @@ fn show_numeric_keypad(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st
         });
     });
 
+    // Dismiss when tapping outside the keypad popover and bottom action bar
+    let pad_rect = Rect::from_min_size(pad_pos, vec2(pad_w, 380.0));
+    let bottom_bar_rect = Rect::from_center_size(pos2(screen.center().x, screen.bottom() - 36.0), vec2(400.0, 70.0));
+    if let Some(press_origin) = ctx.input(|i| if i.pointer.primary_pressed() { i.pointer.press_origin() } else { None }) {
+        if !pad_rect.contains(press_origin) && !bottom_bar_rect.contains(press_origin) {
+            cancel = true;
+        }
+    }
+
     if commit {
         let val_num = st.keypad_value.parse::<f64>().unwrap_or(0.0);
         let val_expr = format!("{} mm", st.keypad_value.trim());
@@ -1145,10 +1159,12 @@ fn show_context_selection_bar(app: &mut SolveApp, ctx: &egui::Context, screen: R
                             if ui.add(btn_extrude).backing_on_hover_text("Tarik / Tekan Permukaan").clicked() {
                                 action_start = Some("solid.press_pull");
                             }
-                            let btn_sketch = egui::Button::new(egui::RichText::new("✏️ Sketch").strong()).min_size(vec2(80.0, 34.0));
-                            if ui.add(btn_sketch).backing_on_hover_text("Mulai Sketch di Permukaan Ini").clicked() {
-                                if let Some(Sel::Face { point, .. }) = first_sel {
-                                    action_sketch_on_face = Some(point);
+                            if count == 1 {
+                                let btn_sketch = egui::Button::new(egui::RichText::new("✏️ Sketch").strong()).min_size(vec2(80.0, 34.0));
+                                if ui.add(btn_sketch).backing_on_hover_text("Mulai Sketch di Permukaan Ini").clicked() {
+                                    if let Some(Sel::Face { point, .. }) = first_sel {
+                                        action_sketch_on_face = Some(point);
+                                    }
                                 }
                             }
                             let btn_shell = egui::Button::new("🕳️ Shell").min_size(vec2(74.0, 34.0));

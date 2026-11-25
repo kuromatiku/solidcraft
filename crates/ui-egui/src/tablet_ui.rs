@@ -2,9 +2,12 @@
 //!
 //! Provides a modern, touch-first CAD experience inspired by tablet ergonomics:
 //! - Full-bleed edge-to-edge 3D canvas with zero desktop chrome clutter.
-//! - Floating island Top Bar with large touch targets for Undo, Redo, Mode Status, Fit View, and Drawer toggles.
-//! - Vertical Floating Tool Dock (Shapr3D style) on the left edge with large 48×48pt touch targets,
-//!   adapting automatically between 3D Modeling tools and 2D Sketching tools.
+//! - Floating island Top Bar with large touch targets for Project Menu (New, Open, Save, Export),
+//!   Undo, Redo, Mode Status, Fit View, and Drawer toggles.
+//! - Vertical Floating Tool Dock (Shapr3D style) on the left edge with large 46×46pt touch targets,
+//!   featuring expandable tool categories/families (Rectangles, Circles, Arcs, Splines, Modify, Constraints, etc.).
+//! - Compact ergonomic Action Bar centered at the bottom (`screen.center().x, screen.bottom() - 36.0`)
+//!   for quick [✓ Selesai] and [✕ Batal] thumb/pencil taps.
 //! - Slide-over Items/Feature Drawer that can be quickly toggled without permanently stealing screen width.
 //! - Touch Numeric Keypad for fast dimension editing without virtual OS keyboard layout shifts.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -21,10 +24,22 @@ const DOCK_BTN_SIZE: f32 = 46.0;
 /// State for the tablet UI overlay stored across frames.
 #[derive(Clone, Debug, Default)]
 pub struct TabletUiState {
+    pub show_project_menu: bool,
     pub show_views_menu: bool,
     pub show_items_drawer: bool,
+    pub expanded_dock_group: Option<usize>,
     pub keypad_value: String,
     pub keypad_active: bool,
+    pub chosen_sketch_line: Option<String>,
+    pub chosen_sketch_rect: Option<String>,
+    pub chosen_sketch_circle: Option<String>,
+    pub chosen_sketch_curve: Option<String>,
+    pub chosen_sketch_modify: Option<String>,
+    pub chosen_sketch_constraint: Option<String>,
+    pub chosen_solid_create: Option<String>,
+    pub chosen_solid_modify: Option<String>,
+    pub chosen_solid_pattern: Option<String>,
+    pub chosen_inspect: Option<String>,
 }
 
 fn state(ctx: &egui::Context) -> TabletUiState {
@@ -46,8 +61,11 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     let mut st = state(&ctx);
 
     show_top_bar(app, &ctx, screen, &mut st);
-    show_tool_dock(app, &ctx, screen);
+    show_tool_dock(app, &ctx, screen, &mut st);
     show_bottom_action_bar(app, &ctx, screen);
+    if st.show_project_menu {
+        show_project_menu(app, &ctx, screen, &mut st);
+    }
     if st.show_items_drawer {
         show_items_drawer(app, &ctx, screen, &mut st);
     }
@@ -65,7 +83,7 @@ fn show_top_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut 
     let top_margin = 12.0;
     let bar_height = 48.0;
 
-    // --- Left Pill: Doc Name, Undo, Redo ---
+    // --- Left Pill: Project Menu Trigger, Undo, Redo ---
     let left_pos = pos2(16.0, top_margin);
     container.area(egui::Id::unique("tablet_top_left")).order(egui::Order::Middle).fixed_pos(left_pos).show(ctx, |ui| {
         let frame = container.frame(ctx, t.overlay, crate::frame::Side::Left).inner_margin(egui::Margin::symmetric(8, 4));
@@ -73,17 +91,27 @@ fn show_top_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut 
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
 
-                // Document name
+                // Project & File Menu Button
                 let doc_name = app.session.doc.name.clone();
                 let display_name = if doc_name.is_empty() { "SolidCraft".to_string() } else { doc_name };
-                ui.add_space(4.0);
-                ui.strong(display_name);
-                ui.add_space(6.0);
+                let project_btn_text = format!("📄 {} ▾", display_name);
+                let project_btn = egui::Button::new(egui::RichText::new(project_btn_text).strong().size(13.5).color(if st.show_project_menu {
+                    Color32::WHITE
+                } else {
+                    t.text
+                }))
+                .fill(if st.show_project_menu { t.accent } else { Color32::TRANSPARENT })
+                .min_size(vec2(100.0, TOUCH_TARGET - 8.0));
+                if ui.add(project_btn).backing_on_hover_text("Buka menu proyek (Desain Baru, Buka, Simpan, Ekspor STEP/STL/3MF/DXF/OBJ)").clicked() {
+                    st.show_project_menu = !st.show_project_menu;
+                    st.expanded_dock_group = None;
+                    st.show_views_menu = false;
+                }
 
                 // Divider
                 let (div_rect, _) = ui.allocate_exact_size(vec2(1.0, 24.0), Sense::hover());
                 ui.painter().rect_filled(div_rect, 0.0, t.border);
-                ui.add_space(4.0);
+                ui.add_space(2.0);
 
                 // Undo Button
                 let can_undo = !app.session.undo.is_empty();
@@ -112,142 +140,53 @@ fn show_top_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut 
         });
     });
 
-    // --- Center Pill: Mode Pill & Sketch Finish / Cancel ---
+    // --- Center Pill: Mode Indicator & Quick Context Action ---
     let center_pos = pos2(screen.center().x, top_margin);
     container.area(egui::Id::unique("tablet_top_center")).order(egui::Order::Middle).pivot(Align2::CENTER_TOP).fixed_pos(center_pos).show(
         ctx,
         |ui| {
             let in_sketch = app.session.active_sketch.is_some();
-            let frame = container.frame(ctx, t.overlay, crate::frame::Side::Left).inner_margin(egui::Margin::symmetric(12, 4));
+            let frame = container.frame(ctx, t.overlay, crate::frame::Side::Left).inner_margin(egui::Margin::symmetric(12, 6));
             container.show_frame(ui, frame, screen, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = vec2(8.0, 0.0);
                     if in_sketch {
-                        if app.tool.as_ref().is_some_and(|t| t.cmd == "sketch.trim") {
-                            ui.colored_label(Color32::from_rgb(0xf4, 0x3f, 0x5e), "✂️ Trim: Drag across curves to cut");
-                            let trim_done_btn = egui::Button::new(egui::RichText::new("✓ Done").color(Color32::WHITE).strong())
+                        if app.tool.as_ref().is_some_and(|tool| tool.cmd == "sketch.trim") {
+                            ui.colored_label(Color32::from_rgb(0xf4, 0x3f, 0x5e), "✂️ Trim: Tarik jari melintasi kurva untuk potong");
+                            let trim_done_btn = egui::Button::new(egui::RichText::new("✓ Selesai Potong").color(Color32::WHITE).strong())
                                 .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
-                                .min_size(vec2(75.0, 36.0));
-                            if ui.add(trim_done_btn).backing_on_hover_text("Finish trimming").clicked() {
+                                .min_size(vec2(110.0, 32.0));
+                            if ui.add(trim_done_btn).backing_on_hover_text("Selesaikan operasi trim").clicked() {
                                 crate::tools::finish(app);
                             }
                         } else {
-                            ui.colored_label(Color32::from_rgb(0x38, 0xbd, 0xf8), "✏️ Sketch Mode");
-                        }
-
-                        // Finish Sketch Button
-                        let finish_btn = egui::Button::new(egui::RichText::new("✓ Finish").color(Color32::WHITE).strong())
-                            .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
-                            .min_size(vec2(80.0, 36.0));
-                        if ui.add(finish_btn).backing_on_hover_text("Finish Sketch and Save").clicked() {
-                            let sid = app.session.active_sketch;
-                            app.start_pinned("sketch.finish", None);
-                            if let Some(id) = sid {
-                                let n = crate::open_meshing::session_world(&app.session).sketch(id).map_or(0, |s| s.profiles.len());
-                                if n > 0 {
-                                    let items: Vec<serde_json::Value> =
-                                        (0..n).map(|i| serde_json::json!({"type": "profile", "sketch": id, "index": i})).collect();
-                                    let _ = app.run("select.set", serde_json::json!({ "items": items }));
-                                }
-                            }
-                        }
-
-                        // Cancel Sketch Button
-                        let cancel_btn =
-                            egui::Button::new(egui::RichText::new("✕ Cancel").color(t.text_dim)).fill(t.panel).min_size(vec2(70.0, 36.0));
-                        if ui.add(cancel_btn).backing_on_hover_text("Exit Sketch").clicked() {
-                            if !crate::toolbar::cancel_unfinished(app) {
-                                app.start_pinned("sketch.cancel", None);
-                            }
+                            ui.colored_label(Color32::from_rgb(0x38, 0xbd, 0xf8), "✏️ Mode Sketch 2D");
                         }
                     } else if app.dialog.is_some() {
                         let is_press_pull = app.dialog.as_ref().is_some_and(|d| d.press_pull);
-                        let is_fillet = app.dialog.as_ref().is_some_and(|d| matches!(d.kind, crate::dialogs::Kind::Fillet { chamfer: false, .. }));
-                        let is_chamfer = app.dialog.as_ref().is_some_and(|d| matches!(d.kind, crate::dialogs::Kind::Fillet { chamfer: true, .. }));
                         let title = if is_press_pull {
                             "🚀 Press-Pull".to_string()
                         } else {
                             format!("🛠️ {}", app.dialog.as_ref().map(|d| crate::dialogs::report_title(d)).unwrap_or_default())
                         };
                         ui.colored_label(Color32::from_rgb(0x38, 0xbd, 0xf8), title);
-
-                        let mut action_switch = None;
-                        let mut action_sketch_face = false;
-                        let mut action_done = false;
-                        let mut action_cancel = false;
-
-                        // Quick toggle between Fillet (Round) and Chamfer (Bevel)
-                        if is_fillet {
-                            let switch_btn = egui::Button::new(egui::RichText::new("⏢ Chamfer").color(Color32::WHITE).strong())
-                                .fill(Color32::from_rgb(0x02, 0x84, 0xc7))
-                                .min_size(vec2(95.0, 36.0));
-                            if ui.add(switch_btn).backing_on_hover_text("Switch to Chamfer (Bevel)").clicked() {
-                                action_switch = Some("solid.chamfer");
-                            }
-                        } else if is_chamfer {
-                            let switch_btn = egui::Button::new(egui::RichText::new("⌒ Fillet").color(Color32::WHITE).strong())
-                                .fill(Color32::from_rgb(0x02, 0x84, 0xc7))
-                                .min_size(vec2(85.0, 36.0));
-                            if ui.add(switch_btn).backing_on_hover_text("Switch to Fillet (Round)").clicked() {
-                                action_switch = Some("solid.fillet");
-                            }
-                        }
-
-                        // Quick 'Sketch on Face' button when a face is being pulled
-                        if is_press_pull {
-                            let sketch_face_btn = egui::Button::new(egui::RichText::new("✏️ Sketch on Face").color(Color32::WHITE).strong())
-                                .fill(Color32::from_rgb(0x02, 0x84, 0xc7))
-                                .min_size(vec2(125.0, 36.0));
-                            if ui.add(sketch_face_btn).backing_on_hover_text("Open 2D sketch on this planar face").clicked() {
-                                action_sketch_face = true;
-                            }
-                        }
-
-                        // Done / Commit Button
-                        let done_btn = egui::Button::new(egui::RichText::new("✓ Done").color(Color32::WHITE).strong())
-                            .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
-                            .min_size(vec2(75.0, 36.0));
-                        if ui.add(done_btn).backing_on_hover_text("Commit and Apply changes").clicked() {
-                            action_done = true;
-                        }
-
-                        // Cancel Button
-                        let cancel_btn =
-                            egui::Button::new(egui::RichText::new("✕ Cancel").color(t.text_dim)).fill(t.panel).min_size(vec2(70.0, 36.0));
-                        if ui.add(cancel_btn).backing_on_hover_text("Discard changes").clicked() {
-                            action_cancel = true;
-                        }
-
-                        if let Some(target_cmd) = action_switch {
-                            let sel = app.session.selection.clone();
-                            crate::dialogs::cancel(app);
-                            app.session.selection = sel;
-                            app.start(target_cmd);
-                        } else if action_sketch_face {
-                            crate::dialogs::cancel(app);
-                            app.start("sketch.create");
-                        } else if action_done {
-                            crate::dialogs::confirm(app);
-                        } else if action_cancel {
-                            crate::dialogs::cancel(app);
-                        }
                     } else if app
                         .session
                         .selection
                         .first()
                         .is_some_and(|s| matches!(s, solidcraft_engine::Sel::Face { .. } | solidcraft_engine::Sel::Plane { .. }))
                     {
-                        ui.colored_label(Color32::from_rgb(0x38, 0xbd, 0xf8), "📐 Face Picked");
+                        ui.colored_label(Color32::from_rgb(0x38, 0xbd, 0xf8), "📐 Face Dipilih");
                         let extrude_btn = egui::Button::new(egui::RichText::new("⬢ Extrude").color(Color32::WHITE).strong())
                             .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
-                            .min_size(vec2(90.0, 36.0));
-                        if ui.add(extrude_btn).backing_on_hover_text("Extrude this face").clicked() {
+                            .min_size(vec2(85.0, 32.0));
+                        if ui.add(extrude_btn).backing_on_hover_text("Extrude face ini").clicked() {
                             app.start("solid.press_pull");
                         }
                         let sketch_face_btn = egui::Button::new(egui::RichText::new("✏️ Sketch on Face").color(Color32::WHITE).strong())
                             .fill(Color32::from_rgb(0x02, 0x84, 0xc7))
-                            .min_size(vec2(125.0, 36.0));
-                        if ui.add(sketch_face_btn).backing_on_hover_text("Open 2D sketch on this planar face").clicked() {
+                            .min_size(vec2(115.0, 32.0));
+                        if ui.add(sketch_face_btn).backing_on_hover_text("Buka sketch 2D di planar face ini").clicked() {
                             app.start("sketch.create");
                         }
                     } else if app
@@ -256,11 +195,11 @@ fn show_top_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut 
                         .first()
                         .is_some_and(|s| matches!(s, solidcraft_engine::Sel::Profile { .. } | solidcraft_engine::Sel::ExternalSketchCurve { .. }))
                     {
-                        ui.colored_label(Color32::from_rgb(0x38, 0xbd, 0xf8), "⭕ Profile Picked");
+                        ui.colored_label(Color32::from_rgb(0x38, 0xbd, 0xf8), "⭕ Profile Dipilih");
                         let extrude_btn = egui::Button::new(egui::RichText::new("⬢ Extrude").color(Color32::WHITE).strong())
                             .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
-                            .min_size(vec2(95.0, 36.0));
-                        if ui.add(extrude_btn).backing_on_hover_text("Extrude this sketch profile into 3D").clicked() {
+                            .min_size(vec2(90.0, 32.0));
+                        if ui.add(extrude_btn).backing_on_hover_text("Extrude profile sketch ini menjadi 3D").clicked() {
                             if let Some(solidcraft_engine::Sel::ExternalSketchCurve { sketch, .. }) = app.session.selection.first() {
                                 let n = crate::open_meshing::session_world(&app.session).sketch(*sketch).map_or(0, |sk| sk.profiles.len());
                                 if n > 0 {
@@ -278,8 +217,8 @@ fn show_top_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut 
                     // Quick Radial Wheel Menu access
                     let radial_btn = egui::Button::new(egui::RichText::new("⚡ Menu").color(Color32::WHITE).strong())
                         .fill(Color32::from_rgb(0x33, 0x41, 0x55))
-                        .min_size(vec2(68.0, 36.0));
-                    if ui.add(radial_btn).backing_on_hover_text("Open Radial Action Wheel").clicked() {
+                        .min_size(vec2(64.0, 32.0));
+                    if ui.add(radial_btn).backing_on_hover_text("Buka Roda Aksi Radial (⚡)").clicked() {
                         app.preferences.radial_context_menu = true;
                         app.menu.radial = true;
                         crate::context_menu::open_for(app, screen.center(), crate::context_menu::Target::Viewport);
@@ -299,14 +238,15 @@ fn show_top_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut 
 
                 // Fit View Button
                 let fit_btn = egui::Button::new("⛶ Fit").min_size(vec2(50.0, bar_height - 12.0));
-                if ui.add(fit_btn).backing_on_hover_text("Fit all geometry to view").clicked() {
+                if ui.add(fit_btn).backing_on_hover_text("Pusatkan seluruh geometri ke layar").clicked() {
                     let _ = app.run("view.fit", json!({}));
                 }
 
                 // Camera Views Menu
                 let views_label = if st.show_views_menu { "View ▲" } else { "View ▼" };
-                if ui.button(views_label).backing_on_hover_text("Camera Presets").clicked() {
+                if ui.button(views_label).backing_on_hover_text("Preset Arah Sudut Kamera").clicked() {
                     st.show_views_menu = !st.show_views_menu;
+                    st.show_project_menu = false;
                 }
 
                 // Items / Tree Drawer Toggle
@@ -314,12 +254,12 @@ fn show_top_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut 
                 let tree_btn = egui::Button::new(if tree_active { "📑 Items (On)" } else { "📑 Items" })
                     .fill(if tree_active { t.accent } else { t.panel })
                     .min_size(vec2(70.0, bar_height - 12.0));
-                if ui.add(tree_btn).backing_on_hover_text("Toggle Features & Bodies Tree").clicked() {
+                if ui.add(tree_btn).backing_on_hover_text("Toggle Panel Features & Bodies").clicked() {
                     st.show_items_drawer = !st.show_items_drawer;
                 }
 
                 // Desktop / Tablet mode toggle
-                if ui.button("💻 Desktop").backing_on_hover_text("Switch to Desktop UI layout").clicked() {
+                if ui.button("💻 Desktop").backing_on_hover_text("Beralih ke tampilan desktop biasa").clicked() {
                     app.preferences.tablet_ui = false;
                 }
             });
@@ -358,43 +298,281 @@ fn show_top_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut 
     }
 }
 
-/// Floating Vertical Tool Dock on the Left Side (Shapr3D Style)
-fn show_tool_dock(app: &mut SolveApp, ctx: &egui::Context, screen: Rect) {
+/// Project & File Popover Menu (New, Open, Save, Export STEP/STL/3MF/DXF/OBJ, Settings)
+fn show_project_menu(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut TabletUiState) {
+    let t = Tokens::get();
+    let container = Container::new(ctx, Surface::Palette);
+    let menu_pos = pos2(16.0, 12.0 + 48.0 + 4.0);
+
+    container.area(egui::Id::unique("tablet_project_menu_popover")).order(egui::Order::Foreground).fixed_pos(menu_pos).show(ctx, |ui| {
+        let frame = container.frame(ctx, t.panel, crate::frame::Side::Left).inner_margin(egui::Margin::same(12));
+        container.show_frame(ui, frame, screen, |ui| {
+            ui.set_width(260.0);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing = vec2(0.0, 6.0);
+
+                // Header
+                ui.horizontal(|ui| {
+                    let doc_name = app.session.doc.name.clone();
+                    let display_name = if doc_name.is_empty() { "SolidCraft Design" } else { &doc_name };
+                    ui.strong(format!("📁 {}", display_name));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("✕").clicked() {
+                            st.show_project_menu = false;
+                        }
+                    });
+                });
+                ui.separator();
+
+                // Proyek
+                ui.colored_label(t.text_dim, "PROYEK");
+                if ui.add(egui::Button::new("📄 Desain Baru (New)").min_size(vec2(240.0, 36.0))).clicked() {
+                    crate::toolbar::FileAction::New.run(app);
+                    st.show_project_menu = false;
+                }
+                if ui.add(egui::Button::new("📂 Buka Desain (Open)").min_size(vec2(240.0, 36.0))).clicked() {
+                    crate::toolbar::FileAction::Open.run(app);
+                    st.show_project_menu = false;
+                }
+                if ui.add(egui::Button::new("💾 Simpan (Save)").min_size(vec2(240.0, 36.0))).clicked() {
+                    crate::toolbar::FileAction::Save.run(app);
+                    st.show_project_menu = false;
+                }
+                if ui.add(egui::Button::new("💾 Simpan Sebagai... (Save As)").min_size(vec2(240.0, 36.0))).clicked() {
+                    crate::toolbar::FileAction::SaveAs.run(app);
+                    st.show_project_menu = false;
+                }
+
+                ui.separator();
+
+                // Ekspor File
+                ui.colored_label(t.text_dim, "EKSPOR FILE");
+                if ui.add(egui::Button::new("📤 Ekspor STEP (.step)").min_size(vec2(240.0, 34.0))).clicked() {
+                    crate::toolbar::FileAction::Export("step").run(app);
+                    st.show_project_menu = false;
+                }
+                if ui.add(egui::Button::new("📤 Ekspor Mesh STL (.stl)").min_size(vec2(240.0, 34.0))).clicked() {
+                    crate::toolbar::FileAction::ExportMesh("stl").run(app);
+                    st.show_project_menu = false;
+                }
+                if ui.add(egui::Button::new("📤 Ekspor 3MF (.3mf)").min_size(vec2(240.0, 34.0))).clicked() {
+                    crate::toolbar::FileAction::ExportMesh("3mf").run(app);
+                    st.show_project_menu = false;
+                }
+                if ui.add(egui::Button::new("📤 Ekspor OBJ (.obj)").min_size(vec2(240.0, 34.0))).clicked() {
+                    crate::toolbar::FileAction::Export("obj").run(app);
+                    st.show_project_menu = false;
+                }
+                if ui.add(egui::Button::new("📤 Ekspor 2D DXF (.dxf)").min_size(vec2(240.0, 34.0))).clicked() {
+                    crate::toolbar::FileAction::Command("file.export_view_dxf").run(app);
+                    st.show_project_menu = false;
+                }
+
+                ui.separator();
+
+                // Pengaturan
+                ui.colored_label(t.text_dim, "PENGATURAN");
+                if ui.add(egui::Button::new("⚙️ Pengaturan (Settings)").min_size(vec2(240.0, 34.0))).clicked() {
+                    crate::toolbar::FileAction::Settings.run(app);
+                    st.show_project_menu = false;
+                }
+                if ui.add(egui::Button::new("💻 Beralih ke Desktop UI").min_size(vec2(240.0, 34.0))).clicked() {
+                    app.preferences.tablet_ui = false;
+                    st.show_project_menu = false;
+                }
+            });
+        });
+    });
+}
+
+struct DockToolVariant {
+    cmd: &'static str,
+    label: &'static str,
+    icon: &'static str,
+}
+
+struct DockGroup {
+    id: usize,
+    title: &'static str,
+    variants: &'static [DockToolVariant],
+}
+
+const SKETCH_GROUPS: &[DockGroup] = &[
+    DockGroup {
+        id: 0,
+        title: "Lines & Construction",
+        variants: &[
+            DockToolVariant { cmd: "sketch.line", label: "2-Point Line", icon: "line" },
+            DockToolVariant { cmd: "sketch.line.midpoint", label: "Midpoint Line", icon: "line" },
+            DockToolVariant { cmd: "sketch.construction_line", label: "Construction Line", icon: "line" },
+        ],
+    },
+    DockGroup {
+        id: 1,
+        title: "Rectangles",
+        variants: &[
+            DockToolVariant { cmd: "sketch.rectangle.two_point", label: "Corner Rectangle", icon: "rect" },
+            DockToolVariant { cmd: "sketch.rectangle.center", label: "Center Rectangle", icon: "rect" },
+            DockToolVariant { cmd: "sketch.rectangle.three_point", label: "3-Point Rectangle", icon: "rect" },
+            DockToolVariant { cmd: "sketch.rectangle.rounded", label: "Rounded Rectangle", icon: "rect" },
+        ],
+    },
+    DockGroup {
+        id: 2,
+        title: "Circles & Arcs",
+        variants: &[
+            DockToolVariant { cmd: "sketch.circle.center", label: "Center Circle", icon: "circle" },
+            DockToolVariant { cmd: "sketch.circle.two_point", label: "2-Point Circle", icon: "circle" },
+            DockToolVariant { cmd: "sketch.circle.three_point", label: "3-Point Circle", icon: "circle" },
+            DockToolVariant { cmd: "sketch.arc.three_point", label: "3-Point Arc", icon: "arc" },
+            DockToolVariant { cmd: "sketch.arc.center_point", label: "Center Point Arc", icon: "arc" },
+            DockToolVariant { cmd: "sketch.arc.tangent", label: "Tangent Arc", icon: "arc" },
+        ],
+    },
+    DockGroup {
+        id: 3,
+        title: "Curves & Shapes",
+        variants: &[
+            DockToolVariant { cmd: "sketch.spline.fit_point", label: "Fit Point Spline", icon: "spline" },
+            DockToolVariant { cmd: "sketch.spline.control_point", label: "Control Point Spline", icon: "spline" },
+            DockToolVariant { cmd: "sketch.ellipse", label: "Ellipse", icon: "circle" },
+            DockToolVariant { cmd: "sketch.polygon.inscribed", label: "Inscribed Polygon", icon: "rect" },
+            DockToolVariant { cmd: "sketch.slot.center_to_center", label: "Center Slot", icon: "rect" },
+            DockToolVariant { cmd: "sketch.point", label: "Point", icon: "point" },
+        ],
+    },
+    DockGroup { id: 4, title: "Dimension", variants: &[DockToolVariant { cmd: "sketch.dimension", label: "Dimension", icon: "dimension" }] },
+    DockGroup {
+        id: 5,
+        title: "Modify & Edit",
+        variants: &[
+            DockToolVariant { cmd: "sketch.trim", label: "Trim", icon: "trim" },
+            DockToolVariant { cmd: "sketch.extend", label: "Extend", icon: "trim" },
+            DockToolVariant { cmd: "sketch.offset", label: "Offset", icon: "offset" },
+            DockToolVariant { cmd: "sketch.fillet", label: "Sketch Fillet", icon: "fillet" },
+            DockToolVariant { cmd: "sketch.chamfer.equal_distance", label: "Sketch Chamfer", icon: "chamfer" },
+            DockToolVariant { cmd: "sketch.mirror", label: "Mirror", icon: "mirror" },
+        ],
+    },
+    DockGroup {
+        id: 6,
+        title: "Constraints",
+        variants: &[
+            DockToolVariant { cmd: "sketch.constraint.horizontal_vertical", label: "Horiz / Vert", icon: "constraint" },
+            DockToolVariant { cmd: "sketch.constraint.coincident", label: "Coincident", icon: "constraint" },
+            DockToolVariant { cmd: "sketch.constraint.tangent", label: "Tangent", icon: "constraint" },
+            DockToolVariant { cmd: "sketch.constraint.equal", label: "Equal", icon: "constraint" },
+            DockToolVariant { cmd: "sketch.constraint.perpendicular", label: "Perpendicular", icon: "constraint" },
+            DockToolVariant { cmd: "sketch.constraint.parallel", label: "Parallel", icon: "constraint" },
+            DockToolVariant { cmd: "sketch.constraint.concentric", label: "Concentric", icon: "constraint" },
+            DockToolVariant { cmd: "sketch.constraint.midpoint", label: "Midpoint", icon: "constraint" },
+            DockToolVariant { cmd: "sketch.constraint.fix", label: "Fix / Lock", icon: "constraint" },
+        ],
+    },
+    DockGroup {
+        id: 7,
+        title: "Normal/Construction Toggle",
+        variants: &[DockToolVariant { cmd: "sketch.construction", label: "Toggle Normal/Construction", icon: "construction" }],
+    },
+];
+
+const MODEL_GROUPS: &[DockGroup] = &[
+    DockGroup { id: 10, title: "Sketch", variants: &[DockToolVariant { cmd: "sketch.create", label: "New Sketch", icon: "sketch" }] },
+    DockGroup {
+        id: 11,
+        title: "3D Create",
+        variants: &[
+            DockToolVariant { cmd: "solid.extrude", label: "Extrude", icon: "extrude" },
+            DockToolVariant { cmd: "solid.revolve", label: "Revolve", icon: "revolve" },
+            DockToolVariant { cmd: "solid.sweep", label: "Sweep", icon: "sweep" },
+            DockToolVariant { cmd: "solid.loft", label: "Loft", icon: "loft" },
+            DockToolVariant { cmd: "solid.hole", label: "Hole", icon: "hole" },
+            DockToolVariant { cmd: "solid.thread", label: "Thread", icon: "thread" },
+        ],
+    },
+    DockGroup {
+        id: 12,
+        title: "3D Modify",
+        variants: &[
+            DockToolVariant { cmd: "solid.fillet", label: "Fillet", icon: "fillet" },
+            DockToolVariant { cmd: "solid.chamfer", label: "Chamfer", icon: "chamfer" },
+            DockToolVariant { cmd: "solid.shell", label: "Shell", icon: "shell" },
+            DockToolVariant { cmd: "solid.draft", label: "Draft", icon: "draft" },
+            DockToolVariant { cmd: "solid.split_body", label: "Split Body", icon: "split" },
+            DockToolVariant { cmd: "solid.combine", label: "Combine / Boolean", icon: "combine" },
+        ],
+    },
+    DockGroup {
+        id: 13,
+        title: "Patterns & Arrange",
+        variants: &[
+            DockToolVariant { cmd: "solid.mirror", label: "Mirror", icon: "mirror" },
+            DockToolVariant { cmd: "solid.pattern.rectangular", label: "Rectangular Pattern", icon: "pattern_rectangular" },
+            DockToolVariant { cmd: "solid.pattern.circular", label: "Circular Pattern", icon: "pattern_circular" },
+        ],
+    },
+    DockGroup {
+        id: 14,
+        title: "Construct Datum",
+        variants: &[DockToolVariant { cmd: "construct.plane.offset", label: "Offset Plane", icon: "plane_offset" }],
+    },
+    DockGroup {
+        id: 15,
+        title: "Inspect",
+        variants: &[
+            DockToolVariant { cmd: "inspect.measure", label: "Measure", icon: "measure" },
+            DockToolVariant { cmd: "inspect.section", label: "Section Analysis", icon: "section" },
+        ],
+    },
+];
+
+fn get_chosen_cmd<'a>(st: &'a TabletUiState, group: &DockGroup) -> &'static str {
+    let saved = match group.id {
+        0 => st.chosen_sketch_line.as_deref(),
+        1 => st.chosen_sketch_rect.as_deref(),
+        2 => st.chosen_sketch_circle.as_deref(),
+        3 => st.chosen_sketch_curve.as_deref(),
+        5 => st.chosen_sketch_modify.as_deref(),
+        6 => st.chosen_sketch_constraint.as_deref(),
+        11 => st.chosen_solid_create.as_deref(),
+        12 => st.chosen_solid_modify.as_deref(),
+        13 => st.chosen_solid_pattern.as_deref(),
+        15 => st.chosen_inspect.as_deref(),
+        _ => None,
+    };
+    saved
+        .and_then(|cmd| group.variants.iter().find(|v| v.cmd == cmd).map(|v| v.cmd))
+        .unwrap_or_else(|| group.variants.first().map(|v| v.cmd).unwrap_or(""))
+}
+
+fn set_chosen_cmd(st: &mut TabletUiState, group_id: usize, cmd: &str) {
+    let val = Some(cmd.to_string());
+    match group_id {
+        0 => st.chosen_sketch_line = val,
+        1 => st.chosen_sketch_rect = val,
+        2 => st.chosen_sketch_circle = val,
+        3 => st.chosen_sketch_curve = val,
+        5 => st.chosen_sketch_modify = val,
+        6 => st.chosen_sketch_constraint = val,
+        11 => st.chosen_solid_create = val,
+        12 => st.chosen_solid_modify = val,
+        13 => st.chosen_solid_pattern = val,
+        15 => st.chosen_inspect = val,
+        _ => {}
+    }
+}
+
+/// Floating Vertical Tool Dock on the Left Side with Expandable Tool Categories
+fn show_tool_dock(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut TabletUiState) {
     let t = Tokens::get();
     let container = Container::new(ctx, Surface::Navigation);
     let dock_pos = pos2(16.0, 72.0);
 
     let in_sketch = app.session.active_sketch.is_some();
+    let groups: &[DockGroup] = if in_sketch { SKETCH_GROUPS } else { MODEL_GROUPS };
 
-    struct DockTool {
-        cmd: &'static str,
-        icon: &'static str,
-        label: &'static str,
-    }
-
-    let tools: &[DockTool] = if in_sketch {
-        &[
-            DockTool { cmd: "sketch.line", icon: "line", label: "Line" },
-            DockTool { cmd: "sketch.rectangle.two_point", icon: "rect", label: "Rectangle" },
-            DockTool { cmd: "sketch.circle.center", icon: "circle", label: "Circle" },
-            DockTool { cmd: "sketch.arc.three_point", icon: "arc", label: "Arc" },
-            DockTool { cmd: "sketch.spline.fit_point", icon: "spline", label: "Spline" },
-            DockTool { cmd: "sketch.dimension", icon: "dimension", label: "Dimension" },
-            DockTool { cmd: "sketch.trim", icon: "trim", label: "Trim" },
-            DockTool { cmd: "sketch.offset", icon: "offset", label: "Offset" },
-        ]
-    } else {
-        &[
-            DockTool { cmd: "sketch.create", icon: "sketch", label: "New Sketch" },
-            DockTool { cmd: "solid.extrude", icon: "extrude", label: "Extrude" },
-            DockTool { cmd: "solid.revolve", icon: "revolve", label: "Revolve" },
-            DockTool { cmd: "solid.fillet", icon: "fillet", label: "Fillet" },
-            DockTool { cmd: "solid.chamfer", icon: "chamfer", label: "Chamfer" },
-            DockTool { cmd: "solid.hole", icon: "hole", label: "Hole" },
-            DockTool { cmd: "solid.shell", icon: "shell", label: "Shell" },
-            DockTool { cmd: "inspect.measure", icon: "measure", label: "Measure" },
-        ]
-    };
+    let mut opened_flyout_pos = None;
+    let mut opened_flyout_group: Option<&'static DockGroup> = None;
 
     container.area(egui::Id::unique("tablet_side_dock")).order(egui::Order::Middle).fixed_pos(dock_pos).show(ctx, |ui| {
         let frame = container.frame(ctx, t.overlay, crate::frame::Side::Left).inner_margin(egui::Margin::same(6));
@@ -402,13 +580,19 @@ fn show_tool_dock(app: &mut SolveApp, ctx: &egui::Context, screen: Rect) {
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing = vec2(0.0, 6.0);
 
-                for tool in tools {
-                    let is_active = app.tool.as_ref().is_some_and(|active| active.cmd == tool.cmd)
-                        || app.dialog.as_ref().and_then(|d| d.command()).is_some_and(|cmd| cmd == tool.cmd);
-                    let (rect, _) = ui.allocate_exact_size(vec2(DOCK_BTN_SIZE, DOCK_BTN_SIZE), Sense::click());
-                    let resp = ui.interact(rect, ui.scope_id().with(tool.cmd), Sense::click());
+                for group in groups {
+                    let active_cmd = get_chosen_cmd(st, group);
+                    let active_variant = group.variants.iter().find(|v| v.cmd == active_cmd).unwrap_or(&group.variants[0]);
 
-                    let bg_color = if is_active {
+                    let is_running = app.tool.as_ref().is_some_and(|active| group.variants.iter().any(|v| v.cmd == active.cmd))
+                        || app.dialog.as_ref().and_then(|d| d.command()).is_some_and(|cmd| group.variants.iter().any(|v| v.cmd == cmd));
+
+                    let is_flyout_open = st.expanded_dock_group == Some(group.id);
+
+                    let (rect, _) = ui.allocate_exact_size(vec2(DOCK_BTN_SIZE, DOCK_BTN_SIZE), Sense::click());
+                    let resp = ui.interact(rect, ui.scope_id().with(format!("dock_btn_{}", group.id)), Sense::click());
+
+                    let bg_color = if is_running || is_flyout_open {
                         t.accent
                     } else if resp.hovered() {
                         t.hover
@@ -420,15 +604,53 @@ fn show_tool_dock(app: &mut SolveApp, ctx: &egui::Context, screen: Rect) {
                         ui.painter().rect_filled(rect, t.radius_md, bg_color);
                     }
 
-                    // Paint tool icon
-                    crate::icons::paint_icon(ui.painter(), rect.shrink(t.space_8), tool.icon, 1.0);
+                    // Paint icon
+                    let icon_name = solidcraft_engine::find_command(active_variant.cmd).map_or(active_variant.icon, |s| s.icon);
+                    crate::icons::paint_icon(ui.painter(), rect.shrink(t.space_8), icon_name, 1.0);
 
-                    if resp.backing_on_hover_text(tool.label).clicked() {
-                        if is_active {
-                            crate::tools::finish(app);
+                    // If group has multiple variants, paint a small corner chevron indicator
+                    if group.variants.len() > 1 {
+                        let tri_c = rect.right_bottom() - vec2(5.0, 4.0);
+                        ui.painter().text(
+                            tri_c,
+                            Align2::RIGHT_BOTTOM,
+                            "▾",
+                            egui::FontId::proportional(11.0),
+                            if is_running || is_flyout_open { Color32::WHITE } else { t.text_dim },
+                        );
+                    }
+
+                    if is_flyout_open {
+                        opened_flyout_pos = Some(pos2(dock_pos.x + DOCK_BTN_SIZE + 12.0, rect.min.y));
+                        opened_flyout_group = Some(group);
+                    }
+
+                    let is_clicked = resp.clicked();
+                    let is_secondary = resp.secondary_clicked();
+                    let _ = resp.backing_on_hover_text(format!("{} (Tekan untuk buka varian)", active_variant.label));
+
+                    // Click interaction:
+                    // If group has only 1 variant: click starts/toggles it.
+                    // If group has > 1 variant:
+                    //   If not running: click starts the active variant.
+                    //   If already running: click toggles the flyout menu to allow switching variant.
+                    if is_clicked {
+                        if group.variants.len() == 1 {
+                            if is_running {
+                                crate::tools::finish(app);
+                            } else {
+                                app.start(active_variant.cmd);
+                            }
+                        } else if !is_running {
+                            app.start(active_variant.cmd);
                         } else {
-                            app.start(tool.cmd);
+                            st.expanded_dock_group = if st.expanded_dock_group == Some(group.id) { None } else { Some(group.id) };
                         }
+                    }
+
+                    // Right click / secondary click toggles flyout immediately
+                    if is_secondary && group.variants.len() > 1 {
+                        st.expanded_dock_group = if st.expanded_dock_group == Some(group.id) { None } else { Some(group.id) };
                     }
                 }
 
@@ -448,13 +670,82 @@ fn show_tool_dock(app: &mut SolveApp, ctx: &egui::Context, screen: Rect) {
                 };
                 ui.painter().rect_filled(radial_rect, t.radius_md, radial_bg);
                 ui.painter().text(radial_rect.center(), Align2::CENTER_CENTER, "⚡", egui::FontId::proportional(20.0), Color32::WHITE);
-                if radial_resp.backing_on_hover_text("Quick Radial Actions (⚡)").clicked() {
+                if radial_resp.backing_on_hover_text("Aksi Radial Cepat (⚡)").clicked() {
                     app.menu.radial = true;
                     crate::context_menu::open_for(app, screen.center(), crate::context_menu::Target::Viewport);
                 }
             });
         });
     });
+
+    // Render flyout popover for expanded group
+    if let (Some(fly_pos), Some(group)) = (opened_flyout_pos, opened_flyout_group) {
+        let current_chosen = get_chosen_cmd(st, group);
+        let group_id = group.id;
+
+        container.area(egui::Id::unique("tablet_dock_flyout")).order(egui::Order::Foreground).fixed_pos(fly_pos).show(ctx, |ui| {
+            let frame = container.frame(ctx, t.panel, crate::frame::Side::Left).inner_margin(egui::Margin::same(10));
+            container.show_frame(ui, frame, screen, |ui| {
+                ui.set_width(210.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
+                    ui.horizontal(|ui| {
+                        ui.strong(group.title);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("✕").clicked() {
+                                st.expanded_dock_group = None;
+                            }
+                        });
+                    });
+                    ui.separator();
+
+                    for v in group.variants {
+                        let is_active = app.tool.as_ref().is_some_and(|active| active.cmd == v.cmd)
+                            || app.dialog.as_ref().and_then(|d| d.command()).is_some_and(|cmd| cmd == v.cmd);
+                        let is_chosen = current_chosen == v.cmd;
+
+                        let (btn_rect, _) = ui.allocate_exact_size(vec2(210.0, 36.0), Sense::click());
+                        let resp = ui.interact(btn_rect, ui.scope_id().with(format!("flyout_item_{}", v.cmd)), Sense::click());
+
+                        let bg_color = if is_active {
+                            t.accent
+                        } else if is_chosen {
+                            t.hover
+                        } else if resp.hovered() {
+                            t.hover
+                        } else {
+                            Color32::TRANSPARENT
+                        };
+
+                        if bg_color != Color32::TRANSPARENT {
+                            ui.painter().rect_filled(btn_rect, t.radius_md, bg_color);
+                        }
+
+                        // Icon on left
+                        let icon_rect = Rect::from_min_size(btn_rect.min + vec2(6.0, 6.0), vec2(24.0, 24.0));
+                        let icon_name = solidcraft_engine::find_command(v.cmd).map_or(v.icon, |s| s.icon);
+                        crate::icons::paint_icon(ui.painter(), icon_rect, icon_name, 1.0);
+
+                        // Label next to icon
+                        let text_pos = pos2(btn_rect.min.x + 38.0, btn_rect.center().y);
+                        ui.painter().text(
+                            text_pos,
+                            Align2::LEFT_CENTER,
+                            v.label,
+                            egui::FontId::proportional(14.0),
+                            if is_active { Color32::WHITE } else { t.text },
+                        );
+
+                        if resp.clicked() {
+                            set_chosen_cmd(st, group_id, v.cmd);
+                            app.start(v.cmd);
+                            st.expanded_dock_group = None;
+                        }
+                    }
+                });
+            });
+        });
+    }
 }
 
 /// Slide-Over Items / Feature Tree Drawer on the Right Edge
@@ -473,7 +764,7 @@ fn show_items_drawer(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: 
             ui.horizontal(|ui| {
                 ui.strong("📑 Items & Features");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("✕ Close").backing_on_hover_text("Close Items Drawer").clicked() {
+                    if ui.button("✕ Close").backing_on_hover_text("Tutup Panel Items").clicked() {
                         st.show_items_drawer = false;
                     }
                 });
@@ -550,7 +841,7 @@ fn show_numeric_keypad(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st
     });
 }
 
-/// Floating Action Bar at the Bottom-Right (Ergonomic Thumb / Pencil reach for Done & Cancel)
+/// Floating Action Bar at the Bottom Center (Sleek, Compact, Centered)
 fn show_bottom_action_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect) {
     let in_sketch = app.session.active_sketch.is_some();
     let has_dialog = app.dialog.is_some();
@@ -560,7 +851,8 @@ fn show_bottom_action_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect)
 
     let t = Tokens::get();
     let container = Container::new(ctx, Surface::Navigation);
-    let bar_pos = pos2(screen.right() - 20.0, screen.bottom() - 24.0);
+    // Positioned at horizontal center, elevated slightly above bottom edge
+    let bar_pos = pos2(screen.center().x, screen.bottom() - 36.0);
 
     let is_press_pull = app.dialog.as_ref().is_some_and(|d| d.press_pull);
     let is_fillet = app.dialog.as_ref().is_some_and(|d| matches!(d.kind, crate::dialogs::Kind::Fillet { chamfer: false, .. }));
@@ -573,69 +865,69 @@ fn show_bottom_action_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect)
     let mut action_sketch_finish = false;
     let mut action_sketch_cancel = false;
 
-    container.area(egui::Id::unique("tablet_bottom_action_bar")).order(egui::Order::Middle).pivot(Align2::RIGHT_BOTTOM).fixed_pos(bar_pos).show(
+    container.area(egui::Id::unique("tablet_bottom_action_bar")).order(egui::Order::Middle).pivot(Align2::CENTER_BOTTOM).fixed_pos(bar_pos).show(
         ctx,
         |ui| {
-            let frame = container.frame(ctx, t.overlay, crate::frame::Side::Left).inner_margin(egui::Margin::symmetric(14, 8));
+            let frame = container.frame(ctx, t.overlay, crate::frame::Side::Left).inner_margin(egui::Margin::symmetric(10, 6));
             container.show_frame(ui, frame, screen, |ui| {
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
+                    ui.spacing_mut().item_spacing = vec2(8.0, 0.0);
 
                     if in_sketch {
-                        // Cancel Sketch Button
-                        let cancel_btn = egui::Button::new(egui::RichText::new("✕ Batal").color(Color32::from_rgb(0xf8, 0x71, 0x71)).size(15.0))
+                        // Cancel Sketch Button: compact, sleek
+                        let cancel_btn = egui::Button::new(egui::RichText::new("✕ Batal").color(Color32::from_rgb(0xf8, 0x71, 0x71)).size(14.0))
                             .fill(t.panel)
-                            .min_size(vec2(85.0, 42.0));
+                            .min_size(vec2(76.0, 34.0));
                         if ui.add(cancel_btn).backing_on_hover_text("Batal dan keluar dari sketch").clicked() {
                             action_sketch_cancel = true;
                         }
 
-                        // Finish Sketch Button
-                        let finish_btn = egui::Button::new(egui::RichText::new("✓ Selesai Sketch").color(Color32::WHITE).strong().size(15.0))
+                        // Finish Sketch Button: compact, sleek
+                        let finish_btn = egui::Button::new(egui::RichText::new("✓ Selesai").color(Color32::WHITE).strong().size(14.0))
                             .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
-                            .min_size(vec2(130.0, 42.0));
+                            .min_size(vec2(90.0, 34.0));
                         if ui.add(finish_btn).backing_on_hover_text("Simpan dan selesaikan sketch").clicked() {
                             action_sketch_finish = true;
                         }
                     } else if has_dialog {
                         // Fillet / Chamfer 1-tap mode switch pill
                         if is_fillet {
-                            let switch_btn = egui::Button::new(egui::RichText::new("⏢ Chamfer").color(Color32::WHITE).strong().size(14.0))
+                            let switch_btn = egui::Button::new(egui::RichText::new("⏢ Chamfer").color(Color32::WHITE).strong().size(13.0))
                                 .fill(Color32::from_rgb(0x02, 0x84, 0xc7))
-                                .min_size(vec2(95.0, 42.0));
+                                .min_size(vec2(86.0, 34.0));
                             if ui.add(switch_btn).backing_on_hover_text("Switch ke Chamfer (Bevel)").clicked() {
                                 action_switch = Some("solid.chamfer");
                             }
                         } else if is_chamfer {
-                            let switch_btn = egui::Button::new(egui::RichText::new("⌒ Fillet").color(Color32::WHITE).strong().size(14.0))
+                            let switch_btn = egui::Button::new(egui::RichText::new("⌒ Fillet").color(Color32::WHITE).strong().size(13.0))
                                 .fill(Color32::from_rgb(0x02, 0x84, 0xc7))
-                                .min_size(vec2(90.0, 42.0));
+                                .min_size(vec2(80.0, 34.0));
                             if ui.add(switch_btn).backing_on_hover_text("Switch ke Fillet (Round)").clicked() {
                                 action_switch = Some("solid.fillet");
                             }
                         }
 
                         if is_press_pull {
-                            let sketch_btn = egui::Button::new(egui::RichText::new("✏️ Sketch on Face").color(Color32::WHITE).strong().size(14.0))
+                            let sketch_btn = egui::Button::new(egui::RichText::new("✏️ Sketch on Face").color(Color32::WHITE).strong().size(13.0))
                                 .fill(Color32::from_rgb(0x02, 0x84, 0xc7))
-                                .min_size(vec2(130.0, 42.0));
+                                .min_size(vec2(115.0, 34.0));
                             if ui.add(sketch_btn).backing_on_hover_text("Buka sketch di planar face ini").clicked() {
                                 action_sketch_face = true;
                             }
                         }
 
                         // Cancel / Discard
-                        let cancel_btn = egui::Button::new(egui::RichText::new("✕ Batal").color(Color32::from_rgb(0xf8, 0x71, 0x71)).size(15.0))
+                        let cancel_btn = egui::Button::new(egui::RichText::new("✕ Batal").color(Color32::from_rgb(0xf8, 0x71, 0x71)).size(14.0))
                             .fill(t.panel)
-                            .min_size(vec2(85.0, 42.0));
+                            .min_size(vec2(76.0, 34.0));
                         if ui.add(cancel_btn).backing_on_hover_text("Batalkan modifikasi").clicked() {
                             action_cancel = true;
                         }
 
                         // Commit / Apply
-                        let done_btn = egui::Button::new(egui::RichText::new("✓ Selesai").color(Color32::WHITE).strong().size(15.0))
+                        let done_btn = egui::Button::new(egui::RichText::new("✓ Selesai").color(Color32::WHITE).strong().size(14.0))
                             .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
-                            .min_size(vec2(95.0, 42.0));
+                            .min_size(vec2(86.0, 34.0));
                         if ui.add(done_btn).backing_on_hover_text("Apply dan simpan perubahan").clicked() {
                             action_done = true;
                         }

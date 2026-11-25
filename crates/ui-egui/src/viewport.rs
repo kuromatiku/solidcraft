@@ -8306,7 +8306,7 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
                 .collect();
             let _ = app.run("select.set", json!({ "items": items, "add": add }));
         }
-        // Tablet mode: Double-tap on a face or plane directly creates a new sketch!
+        // Tablet mode: Double-tap on a face or plane directly creates a new sketch and looks straight at it!
         if (resp.double_clicked() || pen_double)
             && app.preferences.tablet_ui
             && !held
@@ -8315,14 +8315,58 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
             && app.dialog.is_none()
             && crate::sketch_view::active_sketch(app).is_none()
         {
+            let before = app.settled_cam();
+            let mut created = false;
+            let mut target_pt = None;
             match app.viewport.hover.clone() {
                 Some(Hit::Face { point, .. }) => {
-                    let _ = app.run("sketch.create", json!({ "plane": { "face": [point.x, point.y, point.z] } }));
+                    if app.run("sketch.create", json!({ "plane": { "face": [point.x, point.y, point.z] } })).is_ok() {
+                        created = true;
+                        target_pt = Some(point);
+                    }
                 }
                 Some(Hit::Plane { name, .. }) => {
-                    let _ = app.run("sketch.create", json!({ "plane": name }));
+                    if app.run("sketch.create", json!({ "plane": name })).is_ok() {
+                        created = true;
+                    }
                 }
-                _ => {}
+                _ => {
+                    if let Some(sel) = app.session.selection.first().cloned() {
+                        match sel {
+                            solidcraft_engine::Sel::Face { point, .. } => {
+                                if app.run("sketch.create", json!({ "plane": { "face": [point.x, point.y, point.z] } })).is_ok() {
+                                    created = true;
+                                    target_pt = Some(point);
+                                }
+                            }
+                            solidcraft_engine::Sel::Plane { name } => {
+                                if app.run("sketch.create", json!({ "plane": name })).is_ok() {
+                                    created = true;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            if created {
+                let turned = app.look_at_opened_sketch(before);
+                if !turned {
+                    crate::dialogs::look_at_sketch(app);
+                }
+                if let Some(point) = target_pt
+                    && let Some(view) = app.session.sketching_view
+                {
+                    let _ = crate::documents::with_sketch_camera(app, view, |app| {
+                        let mut to = app.settled_cam();
+                        to.target = point;
+                        app.sketch_camera_target = Some(to);
+                        app.animate_to(to);
+                        if let Some(pre) = &mut app.pre_sketch_cam {
+                            pre.facing = to;
+                        }
+                    });
+                }
             }
         }
         // Double-click a face: edit a linked component in place, activate another component, or

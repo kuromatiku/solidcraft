@@ -8178,6 +8178,36 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
                             let (add, allow_toggle) = if pen_select { (sel.is_some(), true) } else { (add, allow_toggle) };
                             select(app, sel.clone(), add, allow_toggle);
                             crate::select_other::note_click(app, p, if add || pen_select { None } else { sel.clone() });
+                            if app.preferences.tablet_ui
+                                && !held_mods.shift
+                                && app.session.active_sketch.is_none()
+                                && app.tool.is_none()
+                                && app.dialog.is_none()
+                            {
+                                if let Some(s) = &sel {
+                                    match s {
+                                        Sel::Face { .. } | Sel::Profile { .. } => {
+                                            app.session.selection = vec![s.clone()];
+                                            app.start("solid.press_pull");
+                                        }
+                                        Sel::Edge { .. } => {
+                                            app.session.selection = vec![s.clone()];
+                                            app.start("solid.fillet");
+                                        }
+                                        Sel::ExternalSketchCurve { sketch, .. } => {
+                                            let n =
+                                                crate::open_meshing::session_world(&app.session).sketch(*sketch).map_or(0, |sk| sk.profiles.len());
+                                            if n > 0 {
+                                                let items: Vec<serde_json::Value> =
+                                                    (0..n).map(|i| serde_json::json!({"type": "profile", "sketch": sketch, "index": i})).collect();
+                                                let _ = app.run("select.set", serde_json::json!({ "items": items }));
+                                                app.start("solid.extrude");
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -8278,14 +8308,18 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
             let _ = app.run("select.set", json!({ "items": items, "add": add }));
         }
         // Tablet mode: Double-tap on a face or plane directly creates a new sketch and looks straight at it!
+        let is_transient_dialog = app.dialog.as_ref().map_or(false, |d| d.press_pull || matches!(d.kind, crate::dialogs::Kind::Fillet { .. }));
         if (resp.double_clicked() || pen_double)
             && app.preferences.tablet_ui
             && !held
             && !dim_edit
             && app.tool.is_none()
-            && app.dialog.is_none()
+            && (app.dialog.is_none() || is_transient_dialog)
             && crate::sketch_view::active_sketch(app).is_none()
         {
+            if is_transient_dialog {
+                crate::dialogs::cancel(app);
+            }
             let mut created = false;
             let mut target_pt = None;
             let hit = match app.viewport.hover.clone() {

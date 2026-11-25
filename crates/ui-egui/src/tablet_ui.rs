@@ -28,6 +28,7 @@ pub struct TabletUiState {
     pub show_views_menu: bool,
     pub show_items_drawer: bool,
     pub expanded_dock_group: Option<usize>,
+    pub suppress_click_for_group: Option<usize>,
     pub keypad_value: String,
     pub keypad_active: bool,
     pub chosen_sketch_line: Option<String>,
@@ -597,30 +598,49 @@ fn show_tool_dock(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mu
                         opened_flyout_group = Some(group);
                     }
 
+                    // Hold detection: holding for >= 0.35s opens the variant flyout
+                    let (is_held, is_down_here) = ctx.input(|i| {
+                        if i.pointer.primary_down() {
+                            if let (Some(origin), Some(start)) = (i.pointer.press_origin(), i.pointer.press_start_time()) {
+                                if rect.contains(origin) {
+                                    return (i.time - start >= 0.35, true);
+                                }
+                            }
+                        }
+                        (false, false)
+                    });
+
+                    if is_down_here {
+                        ctx.request_repaint_after(std::time::Duration::from_millis(40));
+                    }
+
+                    if is_held && group.variants.len() > 1 {
+                        st.expanded_dock_group = Some(group.id);
+                        st.suppress_click_for_group = Some(group.id);
+                    }
+
                     let is_clicked = resp.clicked();
                     let is_secondary = resp.secondary_clicked();
-                    let _ = resp.backing_on_hover_text(format!("{} (Tekan untuk buka varian)", active_variant.label));
+                    let _ = resp.backing_on_hover_text(format!("{} (Tahan untuk pilih varian)", active_variant.label));
 
                     // Click interaction:
-                    // If group has only 1 variant: click starts/toggles it.
-                    // If group has > 1 variant:
-                    //   If not running: click starts the active variant.
-                    //   If already running: click toggles the flyout menu to allow switching variant.
+                    // If click was triggered by releasing after hold, consume and suppress it.
+                    // Otherwise, single tap ALWAYS starts/toggles the active tool directly!
                     if is_clicked {
-                        if group.variants.len() == 1 {
+                        let was_suppressed = st.suppress_click_for_group.take() == Some(group.id);
+                        if !was_suppressed {
+                            st.expanded_dock_group = None;
                             if is_running {
                                 crate::tools::finish(app);
                             } else {
                                 app.start(active_variant.cmd);
                             }
-                        } else if !is_running {
-                            app.start(active_variant.cmd);
-                        } else {
-                            st.expanded_dock_group = if st.expanded_dock_group == Some(group.id) { None } else { Some(group.id) };
                         }
+                    } else if !ctx.input(|i| i.pointer.primary_down()) && st.suppress_click_for_group == Some(group.id) {
+                        st.suppress_click_for_group = None;
                     }
 
-                    // Right click / secondary click toggles flyout immediately
+                    // Secondary click (desktop right click) toggles flyout immediately
                     if is_secondary && group.variants.len() > 1 {
                         st.expanded_dock_group = if st.expanded_dock_group == Some(group.id) { None } else { Some(group.id) };
                     }
@@ -717,6 +737,21 @@ fn show_tool_dock(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mu
                 });
             });
         });
+    }
+
+    // Dismiss open flyout when tapping outside both the dock and flyout
+    if st.expanded_dock_group.is_some() {
+        let dock_rect = Rect::from_min_size(dock_pos, vec2(DOCK_BTN_SIZE + 16.0, groups.len() as f32 * (DOCK_BTN_SIZE + 6.0) + 70.0));
+        let flyout_rect = opened_flyout_pos
+            .zip(opened_flyout_group)
+            .map(|(pos, grp)| Rect::from_min_size(pos, vec2(230.0, grp.variants.len() as f32 * 42.0 + 50.0)));
+        if let Some(press_pos) = ctx.input(|i| if i.pointer.primary_pressed() { i.pointer.press_origin() } else { None }) {
+            let in_dock = dock_rect.contains(press_pos);
+            let in_flyout = flyout_rect.is_some_and(|r| r.contains(press_pos));
+            if !in_dock && !in_flyout {
+                st.expanded_dock_group = None;
+            }
+        }
     }
 }
 

@@ -2,7 +2,7 @@
 //! worker; the window accepts only the already-proved real-session commit.
 use crate::SolveApp;
 use egui::Context;
-use serde_json::{Value, json};
+use serde_json::Value;
 use solidcraft_engine::render_preparation::Kind;
 
 pub(crate) fn enabled(app: &SolveApp) -> bool {

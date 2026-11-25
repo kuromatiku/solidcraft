@@ -1572,71 +1572,89 @@ impl Dialog {
         )
     }
 
-    /// The main value (shown on the canvas too): label, kind and the expression.
-    pub fn primary(&mut self) -> Option<(&'static str, ValueKind, &mut String)> {
+    /// The main value (shown on the canvas too): label, kind, expression, and optional chamfer flag for Fillet.
+    pub fn primary_with_chamfer(&mut self) -> Option<(&'static str, ValueKind, &mut String, Option<&mut bool>)> {
         let move_field = crate::dialogs_move::value_field(self);
         let through_point = offset_through_point(self).is_some();
+        let to_obj = to_object_on(&self.inputs);
+        let is_curv = matches!(self.extra.get("type").and_then(Value::as_str), Some("curvature" | "g2"));
+        let has_distance = self.extra.contains_key("distance");
         Some(match &mut self.kind {
-            Kind::Extrude { to_offset, .. } if to_object_on(&self.inputs) => ("To Offset", ValueKind::Length, to_offset),
-            Kind::Extrude { distance, .. } => ("Distance", ValueKind::Length, distance),
-            Kind::Revolve { angle, .. } => ("Angle", ValueKind::Angle, angle),
+            Kind::Extrude { to_offset, .. } if to_obj => ("To Offset", ValueKind::Length, to_offset, None),
+            Kind::Extrude { distance, .. } => ("Distance", ValueKind::Length, distance, None),
+            Kind::Revolve { angle, .. } => ("Angle", ValueKind::Angle, angle, None),
             Kind::Fillet { radius, chamfer, .. } => {
                 let label = if *chamfer {
                     "Distance"
-                } else if matches!(self.extra.get("type").and_then(Value::as_str), Some("curvature" | "g2")) {
+                } else if is_curv {
                     "Equivalent Radius"
                 } else {
                     "Radius"
                 };
-                (label, ValueKind::Length, radius)
+                (label, ValueKind::Length, radius, Some(chamfer))
             }
-            Kind::Shell { thickness } => ("Thickness", ValueKind::Length, thickness),
-            Kind::Draft { angle } => ("Angle", ValueKind::Angle, angle),
+            Kind::Shell { thickness } => ("Thickness", ValueKind::Length, thickness, None),
+            Kind::Draft { angle } => ("Angle", ValueKind::Angle, angle, None),
             Kind::Hole { diameter, opts, .. } => {
                 // A thread or a bolt size sets the diameter: nothing to type on the canvas.
                 if opts.tapped || opts.clearance {
                     return None;
                 }
-                ("Diameter", ValueKind::Length, diameter)
+                ("Diameter", ValueKind::Length, diameter, None)
             }
             // A move's main value follows its type: a distance for the ones that translate
             // (along the axis dragged or tabbed to last, X at first; #4776), the angle for
             // Rotate. Point to Point is two picks with nothing to type.
             Kind::Move { mode, x, y, z, rx, ry, rz, angle } => match *mode {
-                crate::dialogs_move::ROTATE => ("Angle", ValueKind::Angle, angle),
+                crate::dialogs_move::ROTATE => ("Angle", ValueKind::Angle, angle, None),
                 crate::dialogs_move::POINT_TO_POINT => return None,
                 _ => match move_field {
-                    1 => ("Y", ValueKind::Length, y),
-                    2 => ("Z", ValueKind::Length, z),
-                    3 => ("X Angle", ValueKind::Angle, rx),
-                    4 => ("Y Angle", ValueKind::Angle, ry),
-                    5 => ("Z Angle", ValueKind::Angle, rz),
-                    _ => ("X", ValueKind::Length, x),
+                    1 => ("Y", ValueKind::Length, y, None),
+                    2 => ("Z", ValueKind::Length, z, None),
+                    3 => ("X Angle", ValueKind::Angle, rx, None),
+                    4 => ("Y Angle", ValueKind::Angle, ry, None),
+                    5 => ("Z Angle", ValueKind::Angle, rz, None),
+                    _ => ("X", ValueKind::Length, x, None),
                 },
             },
-            Kind::PatternRect { spacing, .. } => ("Spacing", ValueKind::Length, spacing),
-            Kind::PatternCirc { angle, .. } => ("Angle", ValueKind::Angle, angle),
-            Kind::Section { offset, .. } => ("Distance", ValueKind::Length, offset),
+            Kind::PatternRect { spacing, .. } => ("Spacing", ValueKind::Length, spacing, None),
+            Kind::PatternCirc { angle, .. } => ("Angle", ValueKind::Angle, angle, None),
+            Kind::Section { offset, .. } => ("Distance", ValueKind::Length, offset, None),
             Kind::OffsetPlane { .. } if through_point => return None,
-            Kind::OffsetPlane { offset } => ("Distance", ValueKind::Length, offset),
-            Kind::PathPlane { t, .. } => ("Position (0 to 1)", ValueKind::Unitless, t),
-            Kind::Rib { thickness, .. } => ("Thickness", ValueKind::Length, thickness),
-            Kind::Emboss { depth, .. } => ("Depth", ValueKind::Length, depth),
-            Kind::PathPattern { spacing, .. } => {
-                (if self.extra.contains_key("distance") { "Distance" } else { "Spacing" }, ValueKind::Length, spacing)
-            }
-            Kind::Pipe { diameter, .. } => ("Diameter", ValueKind::Length, diameter),
-            Kind::Stock { margin } => ("Margin", ValueKind::Length, margin),
-            Kind::AnglePlane { angle, .. } => ("Angle", ValueKind::Angle, angle),
+            Kind::OffsetPlane { offset } => ("Distance", ValueKind::Length, offset, None),
+            Kind::PathPlane { t, .. } => ("Position (0 to 1)", ValueKind::Unitless, t, None),
+            Kind::Rib { thickness, .. } => ("Thickness", ValueKind::Length, thickness, None),
+            Kind::Emboss { depth, .. } => ("Depth", ValueKind::Length, depth, None),
+            Kind::PathPattern { spacing, .. } => (if has_distance { "Distance" } else { "Spacing" }, ValueKind::Length, spacing, None),
+            Kind::Pipe { diameter, .. } => ("Diameter", ValueKind::Length, diameter, None),
+            Kind::Stock { margin } => ("Margin", ValueKind::Length, margin, None),
+            Kind::AnglePlane { angle, .. } => ("Angle", ValueKind::Angle, angle, None),
             Kind::Scale { per_axis: true, .. } => return None,
-            Kind::Scale { factor, .. } => ("Scale", ValueKind::Unitless, factor),
-            Kind::OffsetFaces { distance } => ("Distance", ValueKind::Length, distance),
-            Kind::Sheet(k) => return k.primary(&self.inputs),
-            Kind::Surface(k) => return k.primary(),
-            Kind::Plastic(k) => return k.primary(),
-            Kind::SketchModify(k) => return k.primary(),
+            Kind::Scale { factor, .. } => ("Scale", ValueKind::Unitless, factor, None),
+            Kind::OffsetFaces { distance } => ("Distance", ValueKind::Length, distance, None),
+            Kind::Sheet(k) => {
+                let (l, vk, s) = k.primary(&self.inputs)?;
+                (l, vk, s, None)
+            }
+            Kind::Surface(k) => {
+                let (l, vk, s) = k.primary()?;
+                (l, vk, s, None)
+            }
+            Kind::Plastic(k) => {
+                let (l, vk, s) = k.primary()?;
+                (l, vk, s, None)
+            }
+            Kind::SketchModify(k) => {
+                let (l, vk, s) = k.primary()?;
+                (l, vk, s, None)
+            }
             _ => return None,
         })
+    }
+
+    /// The main value (shown on the canvas too): label, kind and the expression.
+    pub fn primary(&mut self) -> Option<(&'static str, ValueKind, &mut String)> {
+        self.primary_with_chamfer().map(|(l, k, v, _)| (l, k, v))
     }
 
     pub fn wants_picks(&self) -> bool {

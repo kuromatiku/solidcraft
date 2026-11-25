@@ -732,6 +732,14 @@ pub fn update(app: &mut SolveApp, ctx: &egui::Context) {
     pv.set_source(source, revision);
     pv.poll(key, stream_key);
     if pv.running.is_none() && pv.shown_key != Some(key) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let dragging = crate::tool_modifiers::manipulator_dragging();
+            if dragging && (crate::now_ms() - pv.started) < 65.0 {
+                ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                return;
+            }
+        }
         pv.started = crate::now_ms();
         pv.running_stream_key = stream_key;
         pv.running_motion = motion_key(&cmds, app.session.revision, colors).is_some();

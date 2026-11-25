@@ -725,6 +725,7 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
         | Kind::PatternRect { .. } => true,
         Kind::SketchModify(crate::sketch_modify_ui::Mod::Move { .. } | crate::sketch_modify_ui::Mod::PatternRect { .. }) => true,
         Kind::SketchModify(crate::sketch_modify_ui::Mod::Offset { mode, .. }) => !crate::sketch_modify_ui::offset_symmetric(*mode),
+        Kind::Fillet { .. } if app.preferences.tablet_ui => true,
         _ => false,
     };
     let mut focus = take_focus(ui.ctx(), d);
@@ -974,7 +975,7 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
         _ => None,
     };
     let mut second = second_before.clone();
-    let Some((label, kind, value)) = d.primary() else { return };
+    let Some((label, kind, value, mut chamfer_opt)) = d.primary_with_chamfer() else { return };
     let label = match (two_distances, on_second) {
         (true, true) => "Distance 2",
         (true, false) => "Distance 1",
@@ -1021,6 +1022,19 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
         crate::extrude_face_snap::set(drawn.as_ref().and_then(|(_, stop, _)| stop.clone()));
         reverse = matches!(drawn, Some((_, _, true)));
         if let Some((ts, _, _)) = drawn {
+            // For Fillet/Chamfer in tablet mode: dragging into the opposite direction
+            // automatically toggles between Fillet (Round) and Chamfer (Bevel)!
+            if app.preferences.tablet_ui
+                && let Some(ref mut chamfer) = chamfer_opt
+                && let Ok(v) = crate::length_input::eval(&app.session.doc, value, ValueKind::Length)
+            {
+                if v < 0.0 {
+                    **chamfer = !**chamfer;
+                    let step = if app.preferences.tablet_ui { 0.5 } else { snap_step(half_height) };
+                    *value = format_len_drag(&app.session.doc, v.abs().max(step), step, decimals);
+                    ui.data_mut(|data| data.remove::<f64>(arrow_id.with("stem grab")));
+                }
+            }
             if (to_span.is_some() || symmetric_scale != 1.0)
                 && shown_value != original_shown
                 && let Ok(v) = crate::length_input::eval(&app.session.doc, &shown_value, ValueKind::Length)

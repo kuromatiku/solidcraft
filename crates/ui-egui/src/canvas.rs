@@ -1529,9 +1529,12 @@ fn drag_arrow_to(
         i.pointer.hover_pos().or_else(|| i.pointer.interact_pos()).or_else(|| i.pointer.latest_pos()).or_else(|| i.pointer.press_origin())
     });
     let is_touch = ui.input(|i| i.pointer.hover_pos().is_none() || i.pointer.any_down());
-    let tip_reach = if is_touch { 28.0 } else { ARROW_TIP * 0.5 };
-    let stem_reach = if is_touch { 22.0 } else { ARROW_STEM_REACH };
+    let tip_reach = if is_touch { 38.0 } else { ARROW_TIP * 0.5 };
+    let stem_reach = if is_touch { 28.0 } else { ARROW_STEM_REACH };
     let at_tip = egui::Rect::from_center_size(ts, vec2(tip_reach * 2.0, tip_reach * 2.0));
+
+    let grab = id.with("stem grab");
+    let is_currently_dragging = ui.data(|d| d.get_temp::<f64>(grab)).is_some();
 
     let on_handle = pointer.is_some_and(crate::place_gizmo::drawn_at);
     let near_tip = pointer.is_some_and(|p| p.distance(ts) <= tip_reach);
@@ -1539,6 +1542,9 @@ fn drag_arrow_to(
 
     let area = if on_handle {
         egui::Rect::NOTHING
+    } else if is_currently_dragging && let Some(p) = pointer {
+        // While dragging, keep the active touch zone firmly centered on the pointer so drag is never dropped
+        egui::Rect::from_center_size(p, vec2(96.0, 96.0))
     } else if let Some(p) = on_stem {
         egui::Rect::from_center_size(p, vec2(2.0 * stem_reach, 2.0 * stem_reach))
     } else if near_tip && let Some(p) = pointer {
@@ -1550,7 +1556,6 @@ fn drag_arrow_to(
     let r = ui.interact(area, id, egui::Sense::drag());
     let double = r.contains_pointer() && ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary));
     // How far along the arrow the press was short of its end: the drag keeps that gap.
-    let grab = id.with("stem grab");
     if r.drag_started() {
         let grab_p = on_stem.or(pointer);
         let gap = grab_p.and_then(|p| along(proj, p, base, n)).map(|v| v - l);
@@ -1562,6 +1567,9 @@ fn drag_arrow_to(
             }
         });
     }
+    if r.drag_stopped() {
+        ui.data_mut(|d| d.remove::<f64>(grab));
+    }
     if r.dragged()
         && let Some(p) = r.interact_pointer_pos().or_else(|| ui.input(|i| i.pointer.latest_pos()))
         && let Some(v) = along(proj, p, base, n)
@@ -1569,7 +1577,19 @@ fn drag_arrow_to(
         crate::tool_modifiers::set_manipulator_dragging(true);
         let v = v - ui.data(|d| d.get_temp::<f64>(grab)).unwrap_or(0.0);
         let free = crate::tool_modifiers::manipulator_free();
-        let step = snap_step(half_height);
+        // On touch screens / iPad, provide fine responsive snapping (0.5mm / 1mm) so small drags react instantly
+        let step = if is_touch {
+            let s = snap_step(half_height);
+            if s > 2.0 {
+                1.0
+            } else if s > 1.0 {
+                0.5
+            } else {
+                s
+            }
+        } else {
+            snap_step(half_height)
+        };
         stopped = if free { None } else { crate::extrude_face_snap::nearest(proj, base, n, v, stops).cloned() };
         let mut v = match &stopped {
             Some(stop) => stop.distance,
@@ -1595,11 +1615,11 @@ fn drag_arrow_to(
     };
     arrow_wide(painter, start(ts), ts, col, width);
     if is_touch {
-        painter.circle_filled(ts, 4.5, col);
-        painter.circle_stroke(ts, 9.0, Stroke::new(1.5, col));
+        painter.circle_filled(ts, 6.0, col);
+        painter.circle_stroke(ts, 12.0, Stroke::new(1.5, col));
     }
     if hot {
-        painter.circle_stroke(ts, if is_touch { 16.0 } else { 8.0 }, Stroke::new(2.0, col));
+        painter.circle_stroke(ts, if is_touch { 18.0 } else { 8.0 }, Stroke::new(2.5, col));
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
     Some((ts, stopped, double))

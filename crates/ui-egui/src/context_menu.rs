@@ -3075,10 +3075,13 @@ fn sector(d: Vec2) -> Option<usize> {
 /// Press-and-hold of the right button in the viewport opens the menu; releasing over a
 /// direction picks it.
 fn track_hold(app: &mut SolveApp, ctx: &egui::Context) {
-    if !app.preferences.radial_context_menu || crate::mouse_gesture::active(app) {
+    let radial_allowed = app.preferences.radial_context_menu || app.preferences.tablet_ui;
+    if !radial_allowed || crate::mouse_gesture::active(app) {
         app.menu.press = None;
         app.menu.flick = false;
-        app.menu.radial = false;
+        if !app.preferences.tablet_ui {
+            app.menu.radial = false;
+        }
         return;
     }
     let (pressed, down, released, pos, time) = ctx.input(|i| {

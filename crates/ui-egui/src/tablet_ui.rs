@@ -159,18 +159,46 @@ fn show_top_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut 
                                 app.start_pinned("sketch.cancel", None);
                             }
                         }
-                    } else if let Some(d) = &app.dialog {
-                        let title = if d.press_pull { "🚀 Press-Pull".to_string() } else { format!("🛠️ {}", crate::dialogs::report_title(d)) };
+                    } else if app.dialog.is_some() {
+                        let is_press_pull = app.dialog.as_ref().is_some_and(|d| d.press_pull);
+                        let is_fillet = app.dialog.as_ref().is_some_and(|d| matches!(d.kind, crate::dialogs::Kind::Fillet { chamfer: false, .. }));
+                        let is_chamfer = app.dialog.as_ref().is_some_and(|d| matches!(d.kind, crate::dialogs::Kind::Fillet { chamfer: true, .. }));
+                        let title = if is_press_pull {
+                            "🚀 Press-Pull".to_string()
+                        } else {
+                            format!("🛠️ {}", app.dialog.as_ref().map(|d| crate::dialogs::report_title(d)).unwrap_or_default())
+                        };
                         ui.colored_label(Color32::from_rgb(0x38, 0xbd, 0xf8), title);
 
+                        let mut action_switch = None;
+                        let mut action_sketch_face = false;
+                        let mut action_done = false;
+                        let mut action_cancel = false;
+
+                        // Quick toggle between Fillet (Round) and Chamfer (Bevel)
+                        if is_fillet {
+                            let switch_btn = egui::Button::new(egui::RichText::new("⏢ Chamfer").color(Color32::WHITE).strong())
+                                .fill(Color32::from_rgb(0x02, 0x84, 0xc7))
+                                .min_size(vec2(95.0, 36.0));
+                            if ui.add(switch_btn).backing_on_hover_text("Switch to Chamfer (Bevel)").clicked() {
+                                action_switch = Some("solid.chamfer");
+                            }
+                        } else if is_chamfer {
+                            let switch_btn = egui::Button::new(egui::RichText::new("⌒ Fillet").color(Color32::WHITE).strong())
+                                .fill(Color32::from_rgb(0x02, 0x84, 0xc7))
+                                .min_size(vec2(85.0, 36.0));
+                            if ui.add(switch_btn).backing_on_hover_text("Switch to Fillet (Round)").clicked() {
+                                action_switch = Some("solid.fillet");
+                            }
+                        }
+
                         // Quick 'Sketch on Face' button when a face is being pulled
-                        if d.press_pull {
+                        if is_press_pull {
                             let sketch_face_btn = egui::Button::new(egui::RichText::new("✏️ Sketch on Face").color(Color32::WHITE).strong())
                                 .fill(Color32::from_rgb(0x02, 0x84, 0xc7))
                                 .min_size(vec2(125.0, 36.0));
                             if ui.add(sketch_face_btn).backing_on_hover_text("Open 2D sketch on this planar face").clicked() {
-                                crate::dialogs::cancel(app);
-                                app.start("sketch.create");
+                                action_sketch_face = true;
                             }
                         }
 
@@ -179,13 +207,27 @@ fn show_top_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut 
                             .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
                             .min_size(vec2(75.0, 36.0));
                         if ui.add(done_btn).backing_on_hover_text("Commit and Apply changes").clicked() {
-                            crate::dialogs::confirm(app);
+                            action_done = true;
                         }
 
                         // Cancel Button
                         let cancel_btn =
                             egui::Button::new(egui::RichText::new("✕ Cancel").color(t.text_dim)).fill(t.panel).min_size(vec2(70.0, 36.0));
                         if ui.add(cancel_btn).backing_on_hover_text("Discard changes").clicked() {
+                            action_cancel = true;
+                        }
+
+                        if let Some(target_cmd) = action_switch {
+                            let sel = app.session.selection.clone();
+                            crate::dialogs::cancel(app);
+                            app.session.selection = sel;
+                            app.start(target_cmd);
+                        } else if action_sketch_face {
+                            crate::dialogs::cancel(app);
+                            app.start("sketch.create");
+                        } else if action_done {
+                            crate::dialogs::confirm(app);
+                        } else if action_cancel {
                             crate::dialogs::cancel(app);
                         }
                     } else if app
@@ -237,6 +279,7 @@ fn show_top_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut 
                         .fill(Color32::from_rgb(0x33, 0x41, 0x55))
                         .min_size(vec2(68.0, 36.0));
                     if ui.add(radial_btn).backing_on_hover_text("Open Radial Action Wheel").clicked() {
+                        app.preferences.radial_context_menu = true;
                         app.menu.radial = true;
                         crate::context_menu::open_for(app, screen.center(), crate::context_menu::Target::Viewport);
                     }

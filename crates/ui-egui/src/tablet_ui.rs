@@ -16,6 +16,8 @@ use crate::SolveApp;
 use crate::ui_kit::{BackingTooltipExt as _, Container, Surface};
 use egui::{Align2, Color32, Rect, Sense, pos2, vec2};
 use serde_json::json;
+use solidcore_record::Vec3;
+use solidcraft_engine::Sel;
 use solidcraft_theme::Tokens;
 
 const TOUCH_TARGET: f32 = 44.0;
@@ -30,7 +32,9 @@ pub struct TabletUiState {
     pub expanded_dock_group: Option<usize>,
     pub suppress_click_for_group: Option<usize>,
     pub keypad_value: String,
+    pub keypad_label: String,
     pub keypad_active: bool,
+    pub keypad_target_is_dim: bool,
     pub chosen_sketch_line: Option<String>,
     pub chosen_sketch_rect: Option<String>,
     pub chosen_sketch_circle: Option<String>,
@@ -61,9 +65,24 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
 
     let mut st = state(&ctx);
 
+    // Auto-open numeric keypad when inline dimension edit starts
+    if crate::dim_view::editing() && !st.keypad_active {
+        st.keypad_active = true;
+        st.keypad_label = "Dimensi".to_string();
+        st.keypad_value = crate::dim_view::editing_expr().unwrap_or_default().trim_end_matches("mm").trim().to_string();
+        st.keypad_target_is_dim = true;
+    }
+
     show_top_bar(app, &ctx, screen, &mut st);
     show_tool_dock(app, &ctx, screen, &mut st);
-    show_bottom_action_bar(app, &ctx, screen);
+
+    // Context Selection Bar when geometry is selected and no tool/dialog is active
+    if !app.session.selection.is_empty() && app.tool.is_none() && app.dialog.is_none() {
+        show_context_selection_bar(app, &ctx, screen);
+    } else {
+        show_bottom_action_bar(app, &ctx, screen, &mut st);
+    }
+
     show_bottom_left_bar(app, &ctx, screen);
     if st.show_project_menu {
         show_project_menu(app, &ctx, screen, &mut st);
@@ -356,6 +375,15 @@ fn show_project_menu(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: 
             });
         });
     });
+
+    // Dismiss when tapping outside the project popover and top bar button
+    let project_menu_rect = Rect::from_min_size(menu_pos, vec2(270.0, 500.0));
+    let project_btn_rect = Rect::from_min_size(pos2(16.0, 12.0), vec2(200.0, 48.0));
+    if let Some(press_origin) = ctx.input(|i| if i.pointer.primary_pressed() { i.pointer.press_origin() } else { None }) {
+        if !project_menu_rect.contains(press_origin) && !project_btn_rect.contains(press_origin) {
+            st.show_project_menu = false;
+        }
+    }
 }
 
 struct DockToolVariant {
@@ -785,40 +813,83 @@ fn show_items_drawer(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: 
     });
 }
 
-/// Floating On-Screen Numeric Keypad for Dimension Input
+/// Floating On-Screen Numeric Keypad for Dimension & Parameter Input
 fn show_numeric_keypad(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut TabletUiState) {
     let t = Tokens::get();
     let container = Container::new(ctx, Surface::Palette);
-    let pad_pos = pos2(screen.right() - 260.0, screen.bottom() - 320.0);
+    let pad_w = 250.0;
+    let pad_pos = pos2((screen.right() - pad_w - 16.0).max(10.0), (screen.bottom() - 380.0).max(60.0));
+
+    let mut commit = false;
+    let mut cancel = false;
 
     container.area(egui::Id::unique("tablet_numeric_keypad")).order(egui::Order::Foreground).fixed_pos(pad_pos).show(ctx, |ui| {
-        let frame = container.frame(ctx, t.panel, crate::frame::Side::Right).inner_margin(egui::Margin::same(8));
+        let frame = container.frame(ctx, t.panel, crate::frame::Side::Right).inner_margin(egui::Margin::same(10));
         container.show_frame(ui, frame, screen, |ui| {
-            ui.set_width(240.0);
+            ui.set_width(pad_w);
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(&st.keypad_value).monospace().size(18.0));
+                    let label = if st.keypad_label.is_empty() { "Input Angka" } else { &st.keypad_label };
+                    ui.strong(format!("🔢 {}", label));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("✕").clicked() {
-                            st.keypad_active = false;
-                            st.keypad_value.clear();
+                            cancel = true;
                         }
                     });
                 });
                 ui.separator();
 
+                // Value Display Box
+                let display_text = if st.keypad_value.is_empty() { "0" } else { &st.keypad_value };
+                let (disp_rect, _) = ui.allocate_exact_size(vec2(pad_w, 38.0), Sense::hover());
+                ui.painter().rect_filled(disp_rect, t.radius_sm, Color32::from_rgb(0x0f, 0x17, 0x2a));
+                ui.painter().rect_stroke(disp_rect, t.radius_sm, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+                ui.painter().text(
+                    pos2(disp_rect.right() - 10.0, disp_rect.center().y),
+                    Align2::RIGHT_CENTER,
+                    format!("{} mm", display_text),
+                    egui::FontId::monospace(18.0),
+                    Color32::WHITE,
+                );
+
+                ui.add_space(4.0);
+
+                // Quick Increment/Decrement Presets
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
+                    for (lbl, delta) in [("-10", -10.0), ("-1", -1.0), ("+1", 1.0), ("+10", 10.0)] {
+                        let btn = egui::Button::new(egui::RichText::new(lbl).size(12.0)).min_size(vec2(58.0, 28.0));
+                        if ui.add(btn).clicked() {
+                            let curr = st.keypad_value.parse::<f64>().unwrap_or(0.0);
+                            let next = (curr + delta).max(0.0);
+                            st.keypad_value = format!("{:.1}", next).trim_end_matches(".0").to_string();
+                        }
+                    }
+                });
+
+                ui.add_space(4.0);
+
+                // Numpad Grid (7 8 9, 4 5 6, 1 2 3, ± 0 .)
                 let rows = [["7", "8", "9"], ["4", "5", "6"], ["1", "2", "3"], ["±", "0", "."]];
 
                 for row in rows {
                     ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
                         for key in row {
-                            let btn = egui::Button::new(egui::RichText::new(key).size(16.0)).min_size(vec2(72.0, 44.0));
+                            let btn = egui::Button::new(egui::RichText::new(key).size(17.0).strong()).min_size(vec2(79.0, 42.0));
                             if ui.add(btn).clicked() {
                                 if key == "±" {
                                     if st.keypad_value.starts_with('-') {
                                         st.keypad_value.remove(0);
                                     } else {
                                         st.keypad_value.insert(0, '-');
+                                    }
+                                } else if key == "." {
+                                    if !st.keypad_value.contains('.') {
+                                        if st.keypad_value.is_empty() {
+                                            st.keypad_value.push('0');
+                                        }
+                                        st.keypad_value.push('.');
                                     }
                                 } else {
                                     st.keypad_value.push_str(key);
@@ -828,28 +899,64 @@ fn show_numeric_keypad(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st
                     });
                 }
 
+                ui.add_space(4.0);
+
+                // Bottom row: Backspace & Enter/OK
                 ui.horizontal(|ui| {
-                    if ui.add(egui::Button::new("⌫ Back").min_size(vec2(108.0, 44.0))).clicked() {
+                    ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
+                    let back_btn = egui::Button::new(egui::RichText::new("⌫ Hapus").size(14.0)).min_size(vec2(108.0, 42.0));
+                    if ui.add(back_btn).clicked() {
                         st.keypad_value.pop();
                     }
-                    let enter_btn = egui::Button::new(egui::RichText::new("✓ OK").color(Color32::WHITE).strong())
+                    let enter_btn = egui::Button::new(egui::RichText::new("✓ OK").color(Color32::WHITE).strong().size(15.0))
                         .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
-                        .min_size(vec2(108.0, 44.0));
+                        .min_size(vec2(132.0, 42.0));
                     if ui.add(enter_btn).clicked() {
-                        if let Ok(val) = st.keypad_value.parse::<f64>() {
-                            let _ = app.run("sketch.dim.set", json!({ "value": val }));
-                        }
-                        st.keypad_active = false;
-                        st.keypad_value.clear();
+                        commit = true;
                     }
                 });
             });
         });
     });
+
+    if commit {
+        let val_num = st.keypad_value.parse::<f64>().unwrap_or(0.0);
+        let val_expr = format!("{} mm", st.keypad_value.trim());
+
+        if st.keypad_target_is_dim && crate::dim_view::editing() {
+            crate::dim_view::set_editing_expr(app, &val_expr);
+            crate::dim_view::commit_edit(app);
+        } else if let Some((_, _, val)) = app.dialog.as_mut().and_then(|d| d.primary()) {
+            *val = val_expr;
+            if let Some(d) = app.dialog.as_mut() {
+                d.confirm = true;
+            }
+        } else {
+            let _ = app.run("sketch.dim.set", json!({ "value": val_num }));
+        }
+        st.keypad_active = false;
+        st.keypad_value.clear();
+    } else if cancel {
+        if st.keypad_target_is_dim && crate::dim_view::editing() {
+            crate::dim_view::cancel_edit(app);
+        }
+        st.keypad_active = false;
+        st.keypad_value.clear();
+    } else {
+        // Live preview sync
+        if !st.keypad_value.is_empty() {
+            let val_expr = format!("{} mm", st.keypad_value.trim());
+            if st.keypad_target_is_dim && crate::dim_view::editing() {
+                crate::dim_view::set_editing_expr(app, &val_expr);
+            } else if let Some((_, _, val)) = app.dialog.as_mut().and_then(|d| d.primary()) {
+                *val = val_expr;
+            }
+        }
+    }
 }
 
 /// Floating Action Bar at the Bottom Center (Sleek, Compact, Centered)
-fn show_bottom_action_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect) {
+fn show_bottom_action_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st: &mut TabletUiState) {
     let in_sketch = app.session.active_sketch.is_some();
     let has_dialog = app.dialog.is_some();
     if !in_sketch && !has_dialog {
@@ -881,7 +988,7 @@ fn show_bottom_action_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect)
                     ui.spacing_mut().item_spacing = vec2(8.0, 0.0);
 
                     if in_sketch {
-                        // Cancel Sketch Button: compact, sleek
+                        // Cancel Sketch Button
                         let cancel_btn = egui::Button::new(egui::RichText::new("✕ Batal").color(Color32::from_rgb(0xf8, 0x71, 0x71)).size(14.0))
                             .fill(t.panel)
                             .min_size(vec2(76.0, 34.0));
@@ -889,7 +996,23 @@ fn show_bottom_action_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect)
                             action_sketch_cancel = true;
                         }
 
-                        // Finish Sketch Button: compact, sleek
+                        // Dimension Keypad Button when dimension editing is active in sketch
+                        if crate::dim_view::editing() {
+                            let edit_val = crate::dim_view::editing_expr().unwrap_or_default();
+                            let display_val = if edit_val.trim().is_empty() { "Dimensi" } else { edit_val.trim() };
+                            let num_btn =
+                                egui::Button::new(egui::RichText::new(format!("🔢 {}", display_val)).color(Color32::WHITE).strong().size(13.0))
+                                    .fill(if st.keypad_active { t.accent } else { Color32::from_rgb(0x33, 0x41, 0x55) })
+                                    .min_size(vec2(86.0, 34.0));
+                            if ui.add(num_btn).backing_on_hover_text("Ubah dimensi dengan Keypad").clicked() {
+                                st.keypad_active = !st.keypad_active;
+                                st.keypad_label = "Dimensi".to_string();
+                                st.keypad_value = edit_val.trim_end_matches("mm").trim().to_string();
+                                st.keypad_target_is_dim = true;
+                            }
+                        }
+
+                        // Finish Sketch Button
                         let finish_btn = egui::Button::new(egui::RichText::new("✓ Selesai").color(Color32::WHITE).strong().size(14.0))
                             .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
                             .min_size(vec2(90.0, 34.0));
@@ -920,6 +1043,22 @@ fn show_bottom_action_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect)
                                 .min_size(vec2(115.0, 34.0));
                             if ui.add(sketch_btn).backing_on_hover_text("Buka sketch di planar face ini").clicked() {
                                 action_sketch_face = true;
+                            }
+                        }
+
+                        // Numeric keypad trigger button for dialogs
+                        let primary_info = app.dialog.as_mut().and_then(|d| d.primary()).map(|(l, _, v)| (l, v.clone()));
+                        if let Some((label, val)) = primary_info {
+                            let display_val = if val.trim().is_empty() { "0 mm" } else { val.trim() };
+                            let num_btn =
+                                egui::Button::new(egui::RichText::new(format!("🔢 {}", display_val)).color(Color32::WHITE).strong().size(13.0))
+                                    .fill(if st.keypad_active { t.accent } else { Color32::from_rgb(0x33, 0x41, 0x55) })
+                                    .min_size(vec2(86.0, 34.0));
+                            if ui.add(num_btn).backing_on_hover_text(format!("Ubah {} dengan Keypad", label)).clicked() {
+                                st.keypad_active = !st.keypad_active;
+                                st.keypad_label = label.to_string();
+                                st.keypad_value = val.trim_end_matches("mm").trim().to_string();
+                                st.keypad_target_is_dim = false;
                             }
                         }
 
@@ -970,6 +1109,161 @@ fn show_bottom_action_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect)
         if !crate::toolbar::cancel_unfinished(app) {
             app.start_pinned("sketch.cancel", None);
         }
+    }
+}
+
+/// Floating Context Selection Bar (Mini Action Pill for selected Face, Edge, Profile, Curve, Body)
+fn show_context_selection_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect) {
+    let t = Tokens::get();
+    let container = Container::new(ctx, Surface::Navigation);
+    let bar_pos = pos2(screen.center().x, screen.bottom() - 36.0);
+
+    let first_sel = app.session.selection.first().cloned();
+    let count = app.session.selection.len();
+
+    let mut action_start: Option<&'static str> = None;
+    let mut action_sketch_on_face: Option<Vec3> = None;
+    let mut action_delete = false;
+    let mut action_clear = false;
+    let mut action_construction = false;
+
+    container.area(egui::Id::unique("tablet_context_selection_bar")).order(egui::Order::Middle).pivot(Align2::CENTER_BOTTOM).fixed_pos(bar_pos).show(
+        ctx,
+        |ui| {
+            let frame = container.frame(ctx, t.overlay, crate::frame::Side::Left).inner_margin(egui::Margin::symmetric(12, 6));
+            container.show_frame(ui, frame, screen, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(8.0, 0.0);
+
+                    match &first_sel {
+                        Some(Sel::Face { .. }) => {
+                            ui.label(egui::RichText::new(format!("Face ({})", count)).strong().color(t.text_dim));
+                            ui.separator();
+                            let btn_extrude = egui::Button::new(egui::RichText::new("⬢ Extrude").strong().color(Color32::WHITE))
+                                .fill(t.accent)
+                                .min_size(vec2(86.0, 34.0));
+                            if ui.add(btn_extrude).backing_on_hover_text("Tarik / Tekan Permukaan").clicked() {
+                                action_start = Some("solid.press_pull");
+                            }
+                            let btn_sketch = egui::Button::new(egui::RichText::new("✏️ Sketch").strong()).min_size(vec2(80.0, 34.0));
+                            if ui.add(btn_sketch).backing_on_hover_text("Mulai Sketch di Permukaan Ini").clicked() {
+                                if let Some(Sel::Face { point, .. }) = first_sel {
+                                    action_sketch_on_face = Some(point);
+                                }
+                            }
+                            let btn_shell = egui::Button::new("🕳️ Shell").min_size(vec2(74.0, 34.0));
+                            if ui.add(btn_shell).backing_on_hover_text("Buat Rongga").clicked() {
+                                action_start = Some("solid.shell");
+                            }
+                        }
+                        Some(Sel::Edge { .. }) => {
+                            ui.label(egui::RichText::new(format!("Edge ({})", count)).strong().color(t.text_dim));
+                            ui.separator();
+                            let btn_fillet = egui::Button::new(egui::RichText::new("⌒ Fillet").strong().color(Color32::WHITE))
+                                .fill(t.accent)
+                                .min_size(vec2(80.0, 34.0));
+                            if ui.add(btn_fillet).backing_on_hover_text("Lengkungkan Tepi (Round)").clicked() {
+                                action_start = Some("solid.fillet");
+                            }
+                            let btn_chamfer = egui::Button::new("⏢ Chamfer").min_size(vec2(84.0, 34.0));
+                            if ui.add(btn_chamfer).backing_on_hover_text("Papas Sudut Tepi (Bevel)").clicked() {
+                                action_start = Some("solid.chamfer");
+                            }
+                        }
+                        Some(Sel::Profile { .. }) => {
+                            ui.label(egui::RichText::new(format!("Profil ({})", count)).strong().color(t.text_dim));
+                            ui.separator();
+                            let btn_extrude = egui::Button::new(egui::RichText::new("⬢ Extrude").strong().color(Color32::WHITE))
+                                .fill(t.accent)
+                                .min_size(vec2(86.0, 34.0));
+                            if ui.add(btn_extrude).clicked() {
+                                action_start = Some("solid.extrude");
+                            }
+                            let btn_revolve = egui::Button::new("🔄 Revolve").min_size(vec2(82.0, 34.0));
+                            if ui.add(btn_revolve).clicked() {
+                                action_start = Some("solid.revolve");
+                            }
+                        }
+                        Some(Sel::SketchCurve { .. } | Sel::ExternalSketchCurve { .. }) => {
+                            ui.label(egui::RichText::new(format!("Kurva ({})", count)).strong().color(t.text_dim));
+                            ui.separator();
+                            let btn_dim = egui::Button::new(egui::RichText::new("↔ Dimensi").strong().color(Color32::WHITE))
+                                .fill(t.accent)
+                                .min_size(vec2(86.0, 34.0));
+                            if ui.add(btn_dim).clicked() {
+                                action_start = Some("sketch.dim");
+                            }
+                            let btn_offset = egui::Button::new("⇌ Offset").min_size(vec2(76.0, 34.0));
+                            if ui.add(btn_offset).clicked() {
+                                action_start = Some("sketch.offset");
+                            }
+                            let btn_trim = egui::Button::new("✂️ Trim").min_size(vec2(70.0, 34.0));
+                            if ui.add(btn_trim).clicked() {
+                                action_start = Some("sketch.trim");
+                            }
+                            let btn_const = egui::Button::new("╌ Konstruksi").min_size(vec2(88.0, 34.0));
+                            if ui.add(btn_const).clicked() {
+                                action_construction = true;
+                            }
+                        }
+                        Some(Sel::Body { .. }) => {
+                            ui.label(egui::RichText::new(format!("Body ({})", count)).strong().color(t.text_dim));
+                            ui.separator();
+                            let btn_move = egui::Button::new(egui::RichText::new("↔ Pindah").strong().color(Color32::WHITE))
+                                .fill(t.accent)
+                                .min_size(vec2(80.0, 34.0));
+                            if ui.add(btn_move).clicked() {
+                                action_start = Some("body.move");
+                            }
+                            let btn_color = egui::Button::new("🎨 Warna").min_size(vec2(76.0, 34.0));
+                            if ui.add(btn_color).clicked() {
+                                action_start = Some("body.appearance");
+                            }
+                        }
+                        _ => {
+                            ui.label(egui::RichText::new(format!("Item ({})", count)).color(t.text_dim));
+                        }
+                    }
+
+                    // Delete button
+                    let btn_del = egui::Button::new(egui::RichText::new("🗑️").size(14.0)).min_size(vec2(38.0, 34.0));
+                    if ui.add(btn_del).backing_on_hover_text("Hapus Objek Terpilih").clicked() {
+                        action_delete = true;
+                    }
+
+                    // Deselect button
+                    let btn_clear = egui::Button::new("✕").min_size(vec2(34.0, 34.0));
+                    if ui.add(btn_clear).backing_on_hover_text("Batal Pilih").clicked() {
+                        action_clear = true;
+                    }
+                });
+            });
+        },
+    );
+
+    if let Some(cmd) = action_start {
+        app.start(cmd);
+    }
+    if let Some(pt) = action_sketch_on_face {
+        if app.run("sketch.create", json!({ "plane": { "face": [pt.x, pt.y, pt.z] } })).is_ok() {
+            crate::dialogs::look_at_sketch(app);
+            let mut to = app.settled_cam();
+            to.target = pt;
+            app.sketch_camera_target = Some(to);
+            app.animate_to(to);
+            if let Some(pre) = &mut app.pre_sketch_cam {
+                pre.facing = to;
+            }
+        }
+    }
+    if action_delete {
+        crate::viewport::delete_selection(app);
+    }
+    if action_clear {
+        crate::viewport::select(app, None, false, false);
+    }
+    if action_construction {
+        let _ = app.run("sketch.construction", json!({}));
     }
 }
 

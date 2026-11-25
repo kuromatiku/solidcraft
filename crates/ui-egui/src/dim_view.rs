@@ -1626,6 +1626,43 @@ pub fn editing() -> bool {
     EDIT.with(|e| e.borrow().is_some())
 }
 
+/// The expression currently being edited in inline dimension, if any.
+pub fn editing_expr() -> Option<String> {
+    EDIT.with(|e| e.borrow().as_ref().map(|edit| edit.expr.clone()))
+}
+
+/// Update the expression being edited in inline dimension (e.g. from touch keypad).
+pub fn set_editing_expr(app: &SolveApp, expr: &str) {
+    EDIT.with(|e| {
+        if let Some(edit) = e.borrow_mut().as_mut() {
+            edit.expr = expr.to_string();
+            edit.typed = true;
+            edit.owned = true;
+            if let Some(draft) = edit.draft.as_mut() {
+                reevaluate(app, draft, expr);
+            }
+        }
+    });
+}
+
+/// Commit the inline dimension edit (equivalent to Enter key).
+pub fn commit_edit(app: &mut SolveApp) {
+    EDIT.with(|editor| {
+        if let Some(e) = editor.borrow_mut().take() {
+            settle(app, e, Some(true), false);
+        }
+    });
+}
+
+/// Cancel the inline dimension edit (equivalent to Escape key).
+pub fn cancel_edit(app: &mut SolveApp) {
+    EDIT.with(|editor| {
+        if let Some(e) = editor.borrow_mut().take() {
+            settle(app, e, Some(false), true);
+        }
+    });
+}
+
 /// The open draft's typed text and the text its preview was solved for (tests).
 #[cfg(test)]
 pub fn solved_for() -> Option<(String, String)> {

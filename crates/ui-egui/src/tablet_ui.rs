@@ -47,6 +47,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
 
     show_top_bar(app, &ctx, screen, &mut st);
     show_tool_dock(app, &ctx, screen);
+    show_bottom_action_bar(app, &ctx, screen);
     if st.show_items_drawer {
         show_items_drawer(app, &ctx, screen, &mut st);
     }
@@ -547,4 +548,128 @@ fn show_numeric_keypad(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st
             });
         });
     });
+}
+
+/// Floating Action Bar at the Bottom-Right (Ergonomic Thumb / Pencil reach for Done & Cancel)
+fn show_bottom_action_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect) {
+    let in_sketch = app.session.active_sketch.is_some();
+    let has_dialog = app.dialog.is_some();
+    if !in_sketch && !has_dialog {
+        return;
+    }
+
+    let t = Tokens::get();
+    let container = Container::new(ctx, Surface::Navigation);
+    let bar_pos = pos2(screen.right() - 20.0, screen.bottom() - 24.0);
+
+    let is_press_pull = app.dialog.as_ref().is_some_and(|d| d.press_pull);
+    let is_fillet = app.dialog.as_ref().is_some_and(|d| matches!(d.kind, crate::dialogs::Kind::Fillet { chamfer: false, .. }));
+    let is_chamfer = app.dialog.as_ref().is_some_and(|d| matches!(d.kind, crate::dialogs::Kind::Fillet { chamfer: true, .. }));
+
+    let mut action_switch = None;
+    let mut action_sketch_face = false;
+    let mut action_done = false;
+    let mut action_cancel = false;
+    let mut action_sketch_finish = false;
+    let mut action_sketch_cancel = false;
+
+    container.area(egui::Id::unique("tablet_bottom_action_bar")).order(egui::Order::Middle).pivot(Align2::RIGHT_BOTTOM).fixed_pos(bar_pos).show(
+        ctx,
+        |ui| {
+            let frame = container.frame(ctx, t.overlay, crate::frame::Side::Left).inner_margin(egui::Margin::symmetric(14, 8));
+            container.show_frame(ui, frame, screen, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
+
+                    if in_sketch {
+                        // Cancel Sketch Button
+                        let cancel_btn = egui::Button::new(egui::RichText::new("✕ Batal").color(Color32::from_rgb(0xf8, 0x71, 0x71)).size(15.0))
+                            .fill(t.panel)
+                            .min_size(vec2(85.0, 42.0));
+                        if ui.add(cancel_btn).backing_on_hover_text("Batal dan keluar dari sketch").clicked() {
+                            action_sketch_cancel = true;
+                        }
+
+                        // Finish Sketch Button
+                        let finish_btn = egui::Button::new(egui::RichText::new("✓ Selesai Sketch").color(Color32::WHITE).strong().size(15.0))
+                            .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
+                            .min_size(vec2(130.0, 42.0));
+                        if ui.add(finish_btn).backing_on_hover_text("Simpan dan selesaikan sketch").clicked() {
+                            action_sketch_finish = true;
+                        }
+                    } else if has_dialog {
+                        // Fillet / Chamfer 1-tap mode switch pill
+                        if is_fillet {
+                            let switch_btn = egui::Button::new(egui::RichText::new("⏢ Chamfer").color(Color32::WHITE).strong().size(14.0))
+                                .fill(Color32::from_rgb(0x02, 0x84, 0xc7))
+                                .min_size(vec2(95.0, 42.0));
+                            if ui.add(switch_btn).backing_on_hover_text("Switch ke Chamfer (Bevel)").clicked() {
+                                action_switch = Some("solid.chamfer");
+                            }
+                        } else if is_chamfer {
+                            let switch_btn = egui::Button::new(egui::RichText::new("⌒ Fillet").color(Color32::WHITE).strong().size(14.0))
+                                .fill(Color32::from_rgb(0x02, 0x84, 0xc7))
+                                .min_size(vec2(90.0, 42.0));
+                            if ui.add(switch_btn).backing_on_hover_text("Switch ke Fillet (Round)").clicked() {
+                                action_switch = Some("solid.fillet");
+                            }
+                        }
+
+                        if is_press_pull {
+                            let sketch_btn = egui::Button::new(egui::RichText::new("✏️ Sketch on Face").color(Color32::WHITE).strong().size(14.0))
+                                .fill(Color32::from_rgb(0x02, 0x84, 0xc7))
+                                .min_size(vec2(130.0, 42.0));
+                            if ui.add(sketch_btn).backing_on_hover_text("Buka sketch di planar face ini").clicked() {
+                                action_sketch_face = true;
+                            }
+                        }
+
+                        // Cancel / Discard
+                        let cancel_btn = egui::Button::new(egui::RichText::new("✕ Batal").color(Color32::from_rgb(0xf8, 0x71, 0x71)).size(15.0))
+                            .fill(t.panel)
+                            .min_size(vec2(85.0, 42.0));
+                        if ui.add(cancel_btn).backing_on_hover_text("Batalkan modifikasi").clicked() {
+                            action_cancel = true;
+                        }
+
+                        // Commit / Apply
+                        let done_btn = egui::Button::new(egui::RichText::new("✓ Selesai").color(Color32::WHITE).strong().size(15.0))
+                            .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
+                            .min_size(vec2(95.0, 42.0));
+                        if ui.add(done_btn).backing_on_hover_text("Apply dan simpan perubahan").clicked() {
+                            action_done = true;
+                        }
+                    }
+                });
+            });
+        },
+    );
+
+    if let Some(target_cmd) = action_switch {
+        let sel = app.session.selection.clone();
+        crate::dialogs::cancel(app);
+        app.session.selection = sel;
+        app.start(target_cmd);
+    } else if action_sketch_face {
+        crate::dialogs::cancel(app);
+        app.start("sketch.create");
+    } else if action_done {
+        crate::dialogs::confirm(app);
+    } else if action_cancel {
+        crate::dialogs::cancel(app);
+    } else if action_sketch_finish {
+        let sid = app.session.active_sketch;
+        app.start_pinned("sketch.finish", None);
+        if let Some(id) = sid {
+            let n = crate::open_meshing::session_world(&app.session).sketch(id).map_or(0, |s| s.profiles.len());
+            if n > 0 {
+                let items: Vec<serde_json::Value> = (0..n).map(|i| serde_json::json!({"type": "profile", "sketch": id, "index": i})).collect();
+                let _ = app.run("select.set", serde_json::json!({ "items": items }));
+            }
+        }
+    } else if action_sketch_cancel {
+        if !crate::toolbar::cancel_unfinished(app) {
+            app.start_pinned("sketch.cancel", None);
+        }
+    }
 }

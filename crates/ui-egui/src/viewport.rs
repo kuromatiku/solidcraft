@@ -8306,9 +8306,29 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
                 .collect();
             let _ = app.run("select.set", json!({ "items": items, "add": add }));
         }
+        // Tablet mode: Double-tap on a face or plane directly creates a new sketch!
+        if (resp.double_clicked() || pen_double)
+            && app.preferences.tablet_ui
+            && !held
+            && !dim_edit
+            && app.tool.is_none()
+            && app.dialog.is_none()
+            && crate::sketch_view::active_sketch(app).is_none()
+        {
+            match app.viewport.hover.clone() {
+                Some(Hit::Face { point, .. }) => {
+                    let _ = app.run("sketch.create", json!({ "plane": { "face": [point.x, point.y, point.z] } }));
+                }
+                Some(Hit::Plane { name, .. }) => {
+                    let _ = app.run("sketch.create", json!({ "plane": name }));
+                }
+                _ => {}
+            }
+        }
         // Double-click a face: edit a linked component in place, activate another component, or
         // else open the editor of the feature that made the face (as the Browser's row does).
         if resp.double_clicked()
+            && !app.preferences.tablet_ui
             && !pen_select
             && !held
             && !dim_edit

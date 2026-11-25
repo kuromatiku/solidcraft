@@ -698,6 +698,7 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
         (_, Kind::Extrude { direction: 1 | crate::dialogs::TWO_SIDES_REVERSED, .. }) => -1.0,
         // Surface Extrude's sides are One Side, Symmetric, Flipped (`EXTRUDE_SIDES`).
         (_, Kind::Surface(crate::dialogs_surface::Surf::Extrude { direction: 2, .. })) => -1.0,
+        (_, Kind::Fillet { chamfer: true, .. }) if app.preferences.tablet_ui => -1.0,
         _ => 1.0,
     };
     let symmetric = to_span.is_none()
@@ -1033,6 +1034,7 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
                     let step = if app.preferences.tablet_ui { 0.5 } else { snap_step(half_height) };
                     *value = format_len_drag(&app.session.doc, v.abs().max(step), step, decimals);
                     ui.data_mut(|data| data.remove::<f64>(arrow_id.with("stem grab")));
+                    ui.ctx().request_repaint();
                 }
             }
             if (to_span.is_some() || symmetric_scale != 1.0)

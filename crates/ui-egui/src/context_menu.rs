@@ -3205,48 +3205,53 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let leaving = app.menu.submenu_leave.map(|(depth, _)| depth);
     let key_row = app.menu.key_row;
     let mut seen: Vec<Seen> = Vec::new();
-    let resp = Container::new(ctx, Surface::Popup)
-        .area(egui::Id::unique("sc_context_menu"))
-        .fixed_pos(list_at)
-        .constrain(true)
-        .order(egui::Order::Foreground)
-        .show(ctx, |ui| {
-            if target == Target::Workspace {
-                picked = workspace_menu(ui, &list, key_row, (screen.bottom() - list_at.y).max(160.0)).or(picked.take());
-            } else {
-                // A menu taller than the window scrolls between full-width bars; a menu opened
-                // anywhere else starts at its top again.
-                let rows = egui::Id::unique(("sc_context_menu_rows", at.x.to_bits(), at.y.to_bits()));
-                let room = screen.height() - MENU_CHROME - 2.0 * MENU_SCREEN_GAP;
-                menu_frame(ui, |ui| {
-                    scroll_rows(ui, rows, room, list_height(&list) - MENU_CHROME, |ui| {
-                        seen.push(level_rows(ui, &list, 0, key_row, path.first().copied(), leaving == Some(0), &mut picked))
-                    })
-                });
-            }
-        });
-    inside |= resp.response.contains_pointer() || resp.response.rect.contains(pointer.unwrap_or(Pos2::ZERO));
-    // The quick menu closes when the pointer moves well away from it without picking.
-    if target == Target::Quick && app.menu.submenu.is_empty() && crate::quick_menu::left(resp.response.rect, pointer) {
-        close(app);
-        return;
+    let show_list_menu = !(app.preferences.tablet_ui && app.menu.radial);
+    if show_list_menu {
+        let resp = Container::new(ctx, Surface::Popup)
+            .area(egui::Id::unique("sc_context_menu"))
+            .fixed_pos(list_at)
+            .constrain(true)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                if target == Target::Workspace {
+                    picked = workspace_menu(ui, &list, key_row, (screen.bottom() - list_at.y).max(160.0)).or(picked.take());
+                } else {
+                    // A menu taller than the window scrolls between full-width bars; a menu opened
+                    // anywhere else starts at its top again.
+                    let rows = egui::Id::unique(("sc_context_menu_rows", at.x.to_bits(), at.y.to_bits()));
+                    let room = screen.height() - MENU_CHROME - 2.0 * MENU_SCREEN_GAP;
+                    menu_frame(ui, |ui| {
+                        scroll_rows(ui, rows, room, list_height(&list) - MENU_CHROME, |ui| {
+                            seen.push(level_rows(ui, &list, 0, key_row, path.first().copied(), leaving == Some(0), &mut picked))
+                        })
+                    });
+                }
+            });
+        inside |= resp.response.contains_pointer() || resp.response.rect.contains(pointer.unwrap_or(Pos2::ZERO));
+        // The quick menu closes when the pointer moves well away from it without picking.
+        if target == Target::Quick && app.menu.submenu.is_empty() && crate::quick_menu::left(resp.response.rect, pointer) {
+            close(app);
+            return;
+        }
     }
     let mut leftward = false;
-    for (depth, rows) in levels.iter().copied().enumerate().skip(1) {
-        let Some(row) = seen.get(depth - 1).and_then(|s| s.anchor) else { break };
-        // One area per flyout and contents: an egui area keeps its last size, so a flyout sharing
-        // one with a shorter one would be squeezed into it and scroll.
-        let id = egui::Id::unique(("sc_context_submenu", depth)).with(rows.iter().map(|i| (&i.id, &i.label)).collect::<Vec<_>>());
-        let cursor = if depth == path.len() { app.menu.submenu_key } else { None };
-        let sub = crate::ui_kit::Menu::submenu(ctx, id, row, list_height(rows), leftward, |ui| {
-            egui::ScrollArea::vertical()
-                .max_height((screen.height() - 28.0).max(30.0))
-                .show(ui, |ui| level_rows(ui, rows, depth, cursor, path.get(depth).copied(), leaving == Some(depth), &mut picked))
-                .inner
-        });
-        inside |= sub.response.contains_pointer() || pointer.is_some_and(|p| sub.response.rect.contains(p));
-        leftward = sub.response.rect.center().x < row.center().x;
-        seen.push(sub.inner);
+    if show_list_menu {
+        for (depth, rows) in levels.iter().copied().enumerate().skip(1) {
+            let Some(row) = seen.get(depth - 1).and_then(|s| s.anchor) else { break };
+            // One area per flyout and contents: an egui area keeps its last size, so a flyout sharing
+            // one with a shorter one would be squeezed into it and scroll.
+            let id = egui::Id::unique(("sc_context_submenu", depth)).with(rows.iter().map(|i| (&i.id, &i.label)).collect::<Vec<_>>());
+            let cursor = if depth == path.len() { app.menu.submenu_key } else { None };
+            let sub = crate::ui_kit::Menu::submenu(ctx, id, row, list_height(rows), leftward, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height((screen.height() - 28.0).max(30.0))
+                    .show(ui, |ui| level_rows(ui, rows, depth, cursor, path.get(depth).copied(), leaving == Some(depth), &mut picked))
+                    .inner
+            });
+            inside |= sub.response.contains_pointer() || pointer.is_some_and(|p| sub.response.rect.contains(p));
+            leftward = sub.response.rect.center().x < row.center().x;
+            seen.push(sub.inner);
+        }
     }
 
     let moved = ctx.input(|i| i.pointer.delta() != Vec2::ZERO);

@@ -36,6 +36,8 @@ pub struct TabletUiState {
     pub keypad_active: bool,
     pub keypad_target_is_dim: bool,
     pub keypad_just_opened: bool,
+    pub keypad_opened_at: f64,
+    pub keypad_overwrite_on_first_key: bool,
     pub chosen_sketch_line: Option<String>,
     pub chosen_sketch_rect: Option<String>,
     pub chosen_sketch_circle: Option<String>,
@@ -73,6 +75,8 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         st.keypad_value = crate::dim_view::editing_expr().unwrap_or_default().trim_end_matches("mm").trim().to_string();
         st.keypad_target_is_dim = true;
         st.keypad_just_opened = true;
+        st.keypad_opened_at = ctx.input(|i| i.time);
+        st.keypad_overwrite_on_first_key = true;
     }
 
     show_top_bar(app, &ctx, screen, &mut st);
@@ -846,11 +850,24 @@ fn show_numeric_keypad(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st
                 });
                 ui.separator();
 
-                // Value Display Box
+                // Value Display Box (tap to clear)
+                let (disp_rect, disp_resp) = ui.allocate_exact_size(vec2(pad_w - 20.0, 38.0), Sense::click());
+                if disp_resp.clicked() && !st.keypad_value.is_empty() {
+                    st.keypad_value.clear();
+                    st.keypad_overwrite_on_first_key = false;
+                }
                 let display_text = if st.keypad_value.is_empty() { "0" } else { &st.keypad_value };
-                let (disp_rect, _) = ui.allocate_exact_size(vec2(pad_w, 38.0), Sense::hover());
                 ui.painter().rect_filled(disp_rect, t.radius_sm, Color32::from_rgb(0x0f, 0x17, 0x2a));
                 ui.painter().rect_stroke(disp_rect, t.radius_sm, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+                if !st.keypad_value.is_empty() {
+                    ui.painter().text(
+                        pos2(disp_rect.left() + 8.0, disp_rect.center().y),
+                        Align2::LEFT_CENTER,
+                        "✕ reset",
+                        egui::FontId::proportional(11.0),
+                        Color32::from_rgb(0x64, 0x74, 0x8b),
+                    );
+                }
                 ui.painter().text(
                     pos2(disp_rect.right() - 10.0, disp_rect.center().y),
                     Align2::RIGHT_CENTER,
@@ -865,8 +882,9 @@ fn show_numeric_keypad(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
                     for (lbl, delta) in [("-10", -10.0), ("-1", -1.0), ("+1", 1.0), ("+10", 10.0)] {
-                        let btn = egui::Button::new(egui::RichText::new(lbl).size(12.0)).min_size(vec2(58.0, 28.0));
+                        let btn = egui::Button::new(egui::RichText::new(lbl).size(12.0)).min_size(vec2(54.0, 28.0));
                         if ui.add(btn).clicked() {
+                            st.keypad_overwrite_on_first_key = false;
                             let curr = st.keypad_value.parse::<f64>().unwrap_or(0.0);
                             let next = (curr + delta).max(0.0);
                             st.keypad_value = format!("{:.1}", next).trim_end_matches(".0").to_string();
@@ -883,15 +901,20 @@ fn show_numeric_keypad(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
                         for key in row {
-                            let btn = egui::Button::new(egui::RichText::new(key).size(17.0).strong()).min_size(vec2(79.0, 42.0));
+                            let btn = egui::Button::new(egui::RichText::new(key).size(17.0).strong()).min_size(vec2(74.0, 42.0));
                             if ui.add(btn).clicked() {
                                 if key == "±" {
+                                    st.keypad_overwrite_on_first_key = false;
                                     if st.keypad_value.starts_with('-') {
                                         st.keypad_value.remove(0);
                                     } else {
                                         st.keypad_value.insert(0, '-');
                                     }
                                 } else if key == "." {
+                                    if st.keypad_overwrite_on_first_key {
+                                        st.keypad_value.clear();
+                                        st.keypad_overwrite_on_first_key = false;
+                                    }
                                     if !st.keypad_value.contains('.') {
                                         if st.keypad_value.is_empty() {
                                             st.keypad_value.push('0');
@@ -899,6 +922,10 @@ fn show_numeric_keypad(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st
                                         st.keypad_value.push('.');
                                     }
                                 } else {
+                                    if st.keypad_overwrite_on_first_key {
+                                        st.keypad_value.clear();
+                                        st.keypad_overwrite_on_first_key = false;
+                                    }
                                     st.keypad_value.push_str(key);
                                 }
                             }
@@ -908,17 +935,31 @@ fn show_numeric_keypad(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st
 
                 ui.add_space(4.0);
 
-                // Bottom row: Backspace & Enter/OK
+                // Bottom row: Clear [C], Backspace [⌫], and Enter/OK [✓ OK]
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
-                    let back_btn = egui::Button::new(egui::RichText::new("⌫ Hapus").size(14.0)).min_size(vec2(108.0, 42.0));
-                    if ui.add(back_btn).clicked() {
-                        st.keypad_value.pop();
+                    ui.spacing_mut().item_spacing = vec2(5.0, 0.0);
+
+                    // Clear button (resets all digits in one tap)
+                    let clear_btn = egui::Button::new(egui::RichText::new("C").color(Color32::from_rgb(0xf8, 0x71, 0x71)).strong().size(16.0))
+                        .fill(Color32::from_rgb(0x3f, 0x1d, 0x24))
+                        .min_size(vec2(48.0, 42.0));
+                    if ui.add(clear_btn).backing_on_hover_text("Hapus semua angka (Clear)").clicked() {
+                        st.keypad_value.clear();
+                        st.keypad_overwrite_on_first_key = false;
                     }
+
+                    // Backspace button (removes one character)
+                    let back_btn = egui::Button::new(egui::RichText::new("⌫").size(16.0).strong()).min_size(vec2(52.0, 42.0));
+                    if ui.add(back_btn).backing_on_hover_text("Hapus satu angka (Backspace)").clicked() {
+                        st.keypad_value.pop();
+                        st.keypad_overwrite_on_first_key = false;
+                    }
+
+                    // Confirm OK button
                     let enter_btn = egui::Button::new(egui::RichText::new("✓ OK").color(Color32::WHITE).strong().size(15.0))
                         .fill(Color32::from_rgb(0x16, 0xa3, 0x4a))
-                        .min_size(vec2(132.0, 42.0));
-                    if ui.add(enter_btn).clicked() {
+                        .min_size(vec2(120.0, 42.0));
+                    if ui.add(enter_btn).backing_on_hover_text("Terapkan nilai dimensi").clicked() {
                         commit = true;
                     }
                 });
@@ -927,12 +968,20 @@ fn show_numeric_keypad(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st
     });
 
     // Dismiss when tapping outside the keypad popover and bottom action bar
-    let pad_rect = Rect::from_min_size(pad_pos, vec2(pad_w, 380.0));
+    let pad_rect = Rect::from_min_size(pad_pos, vec2(pad_w, 390.0));
     let bottom_bar_rect = Rect::from_center_size(pos2(screen.center().x, screen.bottom() - 36.0), vec2(400.0, 70.0));
-    if !st.keypad_just_opened {
+    let now = ctx.input(|i| i.time);
+    if now - st.keypad_opened_at >= 0.35 && !st.keypad_just_opened {
         if let Some(press_origin) = ctx.input(|i| if i.pointer.primary_pressed() { i.pointer.press_origin() } else { None }) {
             if !pad_rect.contains(press_origin) && !bottom_bar_rect.contains(press_origin) {
-                cancel = true;
+                // If live dimension text is being placed, canvas tap is pinning it - do not dismiss!
+                if !crate::dim_view::live().is_some() {
+                    if !st.keypad_value.is_empty() {
+                        commit = true;
+                    } else {
+                        cancel = true;
+                    }
+                }
             }
         }
     }
@@ -1034,10 +1083,23 @@ fn show_bottom_action_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect,
                                     .min_size(vec2(86.0, 34.0));
                             if ui.add(num_btn).backing_on_hover_text("Ubah dimensi dengan Keypad").clicked() {
                                 st.keypad_active = !st.keypad_active;
-                                st.keypad_label = "Dimensi".to_string();
-                                st.keypad_value = edit_val.trim_end_matches("mm").trim().to_string();
-                                st.keypad_target_is_dim = true;
-                                st.keypad_just_opened = true;
+                                if st.keypad_active {
+                                    st.keypad_label = "Dimensi".to_string();
+                                    st.keypad_value = edit_val.trim_end_matches("mm").trim().to_string();
+                                    st.keypad_target_is_dim = true;
+                                    st.keypad_just_opened = true;
+                                    st.keypad_opened_at = ctx.input(|i| i.time);
+                                    st.keypad_overwrite_on_first_key = true;
+                                }
+                            }
+                        } else if app.tool.as_ref().is_some_and(|t| t.cmd == "sketch.dimension") {
+                            // Quick button to exit dimension tool and return to drawing lines
+                            let tool_btn = egui::Button::new(egui::RichText::new("↔ Selesai Dimensi").color(Color32::WHITE).strong().size(13.0))
+                                .fill(Color32::from_rgb(0x02, 0x84, 0xc7))
+                                .min_size(vec2(130.0, 34.0));
+                            if ui.add(tool_btn).backing_on_hover_text("Selesai dimensi, kembali ke pensil / gambar").clicked() {
+                                crate::tools::finish(app);
+                                app.start("sketch.line");
                             }
                         }
 
@@ -1085,9 +1147,14 @@ fn show_bottom_action_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect,
                                     .min_size(vec2(86.0, 34.0));
                             if ui.add(num_btn).backing_on_hover_text(format!("Ubah {} dengan Keypad", label)).clicked() {
                                 st.keypad_active = !st.keypad_active;
-                                st.keypad_label = label.to_string();
-                                st.keypad_value = val.trim_end_matches("mm").trim().to_string();
-                                st.keypad_target_is_dim = false;
+                                if st.keypad_active {
+                                    st.keypad_label = label.to_string();
+                                    st.keypad_value = val.trim_end_matches("mm").trim().to_string();
+                                    st.keypad_target_is_dim = false;
+                                    st.keypad_just_opened = true;
+                                    st.keypad_opened_at = ctx.input(|i| i.time);
+                                    st.keypad_overwrite_on_first_key = true;
+                                }
                             }
                         }
 

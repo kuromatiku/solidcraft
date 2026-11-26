@@ -618,17 +618,25 @@ fn seg_dist(p: Pos2, a: Pos2, b: Pos2) -> f32 {
 
 /// The dimension whose value text is under a screen position (its id).
 pub fn hit_text(pos: Pos2) -> Option<String> {
-    DRAWN.with(|d| d.borrow().iter().find(|x| x.text.expand(2.0).contains(pos)).map(|x| x.id.clone()))
+    hit_text_with_slop(pos, 2.0)
+}
+
+pub fn hit_text_with_slop(pos: Pos2, slop: f32) -> Option<String> {
+    DRAWN.with(|d| d.borrow().iter().find(|x| x.text.expand(slop).contains(pos)).map(|x| x.id.clone()))
 }
 
 /// The dimension under a screen position (its id).
 pub fn hit(pos: Pos2) -> Option<String> {
+    hit_with_slop(pos, 2.0, HIT_PX)
+}
+
+pub fn hit_with_slop(pos: Pos2, text_slop: f32, line_slop: f32) -> Option<String> {
     DRAWN.with(|d| {
         let d = d.borrow();
         // Text boxes first (they sit on top of the lines), then the lines.
         d.iter()
-            .find(|x| x.text.expand(2.0).contains(pos))
-            .or_else(|| d.iter().find(|x| x.segs.iter().any(|s| seg_dist(pos, s[0], s[1]) <= HIT_PX)))
+            .find(|x| x.text.expand(text_slop).contains(pos))
+            .or_else(|| d.iter().find(|x| x.segs.iter().any(|s| seg_dist(pos, s[0], s[1]) <= line_slop)))
             .map(|x| x.id.clone())
     })
 }
@@ -657,14 +665,18 @@ pub fn text_rects() -> Vec<(String, Rect)> {
 
 /// A double-click on a dimension opens its value for editing (true: it was on one).
 pub fn double_click(app: &mut SolveApp, pos: Pos2) -> bool {
-    open_editor(app, hit(pos))
+    let slop = if app.preferences.tablet_ui { 14.0 } else { 2.0 };
+    let line_slop = if app.preferences.tablet_ui { 10.0 } else { HIT_PX };
+    open_editor(app, hit_with_slop(pos, slop, line_slop))
 }
 
 /// A click of the Dimension tool on an existing dimension opens its value for editing, as a
 /// double-click does without a tool (true: it was on one). Its text wins; its lines only off
 /// sketch geometry (`on_geometry`), which the click picks for a new dimension instead.
 pub fn tool_click(app: &mut SolveApp, pos: Pos2, on_geometry: bool) -> bool {
-    open_editor(app, hit_text(pos).or_else(|| if on_geometry { None } else { hit(pos) }))
+    let slop = if app.preferences.tablet_ui { 14.0 } else { 2.0 };
+    let line_slop = if app.preferences.tablet_ui { 10.0 } else { HIT_PX };
+    open_editor(app, hit_text_with_slop(pos, slop).or_else(|| if on_geometry { None } else { hit_with_slop(pos, slop, line_slop) }))
 }
 
 /// Open the inline editor on the drawn dimension `id` (true: there was one to act on).

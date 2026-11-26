@@ -547,7 +547,23 @@ pub fn on_click(app: &mut SolveApp, proj: &Proj, pos: Pos2, shift: bool) {
                     // second entity), its value takes the keyboard: D, click, type. A pick that
                     // doesn't keeps the place-first flow; placing reports why.
                     if curve || tool.picks.len() == 2 {
-                        let _ = crate::dim_view::begin_live(app, tool.picks.clone(), Some(pos));
+                        if app.preferences.tablet_ui {
+                            if let Some((at, _)) = sketch_point_at(app, proj, pos) {
+                                match crate::dim_view::begin_dimension(app, tool.picks.clone(), at) {
+                                    Ok(()) => {
+                                        tool.picks.clear();
+                                        tool.point_picks.clear();
+                                    }
+                                    Err(_) => {
+                                        let _ = crate::dim_view::begin_live(app, tool.picks.clone(), Some(pos));
+                                    }
+                                }
+                            } else {
+                                let _ = crate::dim_view::begin_live(app, tool.picks.clone(), Some(pos));
+                            }
+                        } else {
+                            let _ = crate::dim_view::begin_live(app, tool.picks.clone(), Some(pos));
+                        }
                     }
                 }
             } else if !tool.picks.is_empty()

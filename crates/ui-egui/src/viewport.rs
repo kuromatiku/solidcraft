@@ -8244,9 +8244,9 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
         {
             let _ = app.run("select.set", json!({ "items": items, "add": true }));
         }
-        // Double-click a dimension: edit its value in place (a finished sketch's shown dimension
+        // Double-click (or single-tap in tablet mode) a dimension: edit its value in place (a finished sketch's shown dimension
         // too, without editing the sketch).
-        let dim_edit = resp.double_clicked()
+        let dim_edit = (resp.double_clicked() || (app.preferences.tablet_ui && resp.clicked()))
             && !held
             && !crate::dim_view::editing()
             && app.tool.is_none()

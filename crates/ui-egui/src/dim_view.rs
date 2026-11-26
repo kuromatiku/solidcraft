@@ -1519,10 +1519,10 @@ fn edit_box(app: &mut SolveApp, ctx: &egui::Context) {
                     if r.lost_focus() && enter {
                         done = Some(true);
                     } else if e.fresh > 0 {
-                        if !r.has_focus() {
+                        if !r.has_focus() && !app.preferences.tablet_ui {
                             r.request_focus();
                         }
-                    } else if r.lost_focus() {
+                    } else if r.lost_focus() && !app.preferences.tablet_ui {
                         done = Some(false);
                     }
                     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {

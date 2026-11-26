@@ -35,6 +35,7 @@ pub struct TabletUiState {
     pub keypad_label: String,
     pub keypad_active: bool,
     pub keypad_target_is_dim: bool,
+    pub keypad_just_opened: bool,
     pub chosen_sketch_line: Option<String>,
     pub chosen_sketch_rect: Option<String>,
     pub chosen_sketch_circle: Option<String>,
@@ -71,6 +72,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         st.keypad_label = "Dimensi".to_string();
         st.keypad_value = crate::dim_view::editing_expr().unwrap_or_default().trim_end_matches("mm").trim().to_string();
         st.keypad_target_is_dim = true;
+        st.keypad_just_opened = true;
     }
 
     show_top_bar(app, &ctx, screen, &mut st);
@@ -927,15 +929,24 @@ fn show_numeric_keypad(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st
     // Dismiss when tapping outside the keypad popover and bottom action bar
     let pad_rect = Rect::from_min_size(pad_pos, vec2(pad_w, 380.0));
     let bottom_bar_rect = Rect::from_center_size(pos2(screen.center().x, screen.bottom() - 36.0), vec2(400.0, 70.0));
-    if let Some(press_origin) = ctx.input(|i| if i.pointer.primary_pressed() { i.pointer.press_origin() } else { None }) {
-        if !pad_rect.contains(press_origin) && !bottom_bar_rect.contains(press_origin) {
-            cancel = true;
+    if !st.keypad_just_opened {
+        if let Some(press_origin) = ctx.input(|i| if i.pointer.primary_pressed() { i.pointer.press_origin() } else { None }) {
+            if !pad_rect.contains(press_origin) && !bottom_bar_rect.contains(press_origin) {
+                cancel = true;
+            }
         }
     }
+    st.keypad_just_opened = false;
 
     if commit {
-        let val_num = st.keypad_value.parse::<f64>().unwrap_or(0.0);
-        let val_expr = format!("{} mm", st.keypad_value.trim());
+        let trimmed = st.keypad_value.trim();
+        let val_expr = if trimmed.is_empty() {
+            "0 mm".to_string()
+        } else if trimmed.ends_with("mm") || trimmed.ends_with("in") || trimmed.ends_with("deg") {
+            trimmed.to_string()
+        } else {
+            format!("{} mm", trimmed)
+        };
 
         if st.keypad_target_is_dim && crate::dim_view::editing() {
             crate::dim_view::set_editing_expr(app, &val_expr);
@@ -945,25 +956,28 @@ fn show_numeric_keypad(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st
             if let Some(d) = app.dialog.as_mut() {
                 d.confirm = true;
             }
-        } else {
-            let _ = app.run("sketch.dim.set", json!({ "value": val_num }));
         }
         st.keypad_active = false;
         st.keypad_value.clear();
+        st.keypad_target_is_dim = false;
     } else if cancel {
         if st.keypad_target_is_dim && crate::dim_view::editing() {
             crate::dim_view::cancel_edit(app);
         }
         st.keypad_active = false;
         st.keypad_value.clear();
+        st.keypad_target_is_dim = false;
     } else {
         // Live preview sync
         if !st.keypad_value.is_empty() {
-            let val_expr = format!("{} mm", st.keypad_value.trim());
-            if st.keypad_target_is_dim && crate::dim_view::editing() {
-                crate::dim_view::set_editing_expr(app, &val_expr);
-            } else if let Some((_, _, val)) = app.dialog.as_mut().and_then(|d| d.primary()) {
-                *val = val_expr;
+            let trimmed = st.keypad_value.trim();
+            if trimmed.chars().last().is_some_and(|c| c.is_ascii_digit()) {
+                let val_expr = format!("{} mm", trimmed);
+                if st.keypad_target_is_dim && crate::dim_view::editing() {
+                    crate::dim_view::set_editing_expr(app, &val_expr);
+                } else if let Some((_, _, val)) = app.dialog.as_mut().and_then(|d| d.primary()) {
+                    *val = val_expr;
+                }
             }
         }
     }
@@ -1023,6 +1037,7 @@ fn show_bottom_action_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect,
                                 st.keypad_label = "Dimensi".to_string();
                                 st.keypad_value = edit_val.trim_end_matches("mm").trim().to_string();
                                 st.keypad_target_is_dim = true;
+                                st.keypad_just_opened = true;
                             }
                         }
 
@@ -1110,6 +1125,9 @@ fn show_bottom_action_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect,
     } else if action_cancel {
         crate::dialogs::cancel(app);
     } else if action_sketch_finish {
+        if crate::dim_view::editing() {
+            crate::dim_view::commit_edit(app);
+        }
         let sid = app.session.active_sketch;
         app.start_pinned("sketch.finish", None);
         if let Some(id) = sid {
@@ -1120,6 +1138,9 @@ fn show_bottom_action_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect,
             }
         }
     } else if action_sketch_cancel {
+        if crate::dim_view::editing() {
+            crate::dim_view::cancel_edit(app);
+        }
         if !crate::toolbar::cancel_unfinished(app) {
             app.start_pinned("sketch.cancel", None);
         }
@@ -1207,7 +1228,7 @@ fn show_context_selection_bar(app: &mut SolveApp, ctx: &egui::Context, screen: R
                                 .fill(t.accent)
                                 .min_size(vec2(86.0, 34.0));
                             if ui.add(btn_dim).clicked() {
-                                action_start = Some("sketch.dim");
+                                action_start = Some("sketch.dimension");
                             }
                             let btn_offset = egui::Button::new("⇌ Offset").min_size(vec2(76.0, 34.0));
                             if ui.add(btn_offset).clicked() {

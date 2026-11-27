@@ -967,24 +967,6 @@ fn show_numeric_keypad(app: &mut SolveApp, ctx: &egui::Context, screen: Rect, st
         });
     });
 
-    // Dismiss when tapping outside the keypad popover and bottom action bar
-    let pad_rect = Rect::from_min_size(pad_pos, vec2(pad_w, 390.0));
-    let bottom_bar_rect = Rect::from_center_size(pos2(screen.center().x, screen.bottom() - 36.0), vec2(400.0, 70.0));
-    let now = ctx.input(|i| i.time);
-    if now - st.keypad_opened_at >= 0.35 && !st.keypad_just_opened {
-        if let Some(press_origin) = ctx.input(|i| if i.pointer.primary_pressed() { i.pointer.press_origin() } else { None }) {
-            if !pad_rect.contains(press_origin) && !bottom_bar_rect.contains(press_origin) {
-                // If live dimension text is being placed, canvas tap is pinning it - do not dismiss!
-                if !crate::dim_view::live().is_some() {
-                    if !st.keypad_value.is_empty() {
-                        commit = true;
-                    } else {
-                        cancel = true;
-                    }
-                }
-            }
-        }
-    }
     st.keypad_just_opened = false;
 
     if commit {
@@ -1098,6 +1080,12 @@ fn show_bottom_action_bar(app: &mut SolveApp, ctx: &egui::Context, screen: Rect,
                                 .fill(Color32::from_rgb(0x02, 0x84, 0xc7))
                                 .min_size(vec2(130.0, 34.0));
                             if ui.add(tool_btn).backing_on_hover_text("Selesai dimensi, kembali ke pensil / gambar").clicked() {
+                                if st.keypad_active || crate::dim_view::editing() {
+                                    crate::dim_view::commit_edit(app);
+                                    st.keypad_active = false;
+                                    st.keypad_value.clear();
+                                    st.keypad_target_is_dim = false;
+                                }
                                 crate::tools::finish(app);
                                 app.start("sketch.line");
                             }

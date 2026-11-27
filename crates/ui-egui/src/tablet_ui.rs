@@ -1229,21 +1229,23 @@ fn show_context_selection_bar(app: &mut SolveApp, ctx: &egui::Context, screen: R
                         Some(Sel::Face { .. }) => {
                             ui.label(egui::RichText::new(format!("Face ({})", count)).strong().color(t.text_dim));
                             ui.separator();
-                            let btn_extrude = egui::Button::new(egui::RichText::new("⬢ Extrude").strong().color(Color32::WHITE))
-                                .fill(t.accent)
-                                .min_size(vec2(86.0, 34.0));
-                            if ui.add(btn_extrude).backing_on_hover_text("Tarik / Tekan Permukaan").clicked() {
-                                action_start = Some("solid.press_pull");
-                            }
                             if count == 1 {
-                                let btn_sketch = egui::Button::new(egui::RichText::new("✏️ Sketch").strong()).min_size(vec2(80.0, 34.0));
-                                if ui.add(btn_sketch).backing_on_hover_text("Mulai Sketch di Permukaan Ini").clicked() {
+                                let btn_sketch = egui::Button::new(egui::RichText::new("✏️ Buat Sketch").strong().color(Color32::WHITE))
+                                    .fill(Color32::from_rgb(0x25, 0x63, 0xeb))
+                                    .min_size(vec2(104.0, 36.0));
+                                if ui.add(btn_sketch).backing_on_hover_text("Mulai Sketsa pada Permukaan Ini").clicked() {
                                     if let Some(Sel::Face { point, .. }) = first_sel {
                                         action_sketch_on_face = Some(point);
                                     }
                                 }
                             }
-                            let btn_shell = egui::Button::new("🕳️ Shell").min_size(vec2(74.0, 34.0));
+                            let btn_extrude = egui::Button::new(egui::RichText::new("⬢ Extrude").strong().color(Color32::WHITE))
+                                .fill(t.accent)
+                                .min_size(vec2(86.0, 36.0));
+                            if ui.add(btn_extrude).backing_on_hover_text("Tarik / Tekan Permukaan").clicked() {
+                                action_start = Some("solid.press_pull");
+                            }
+                            let btn_shell = egui::Button::new("🕳️ Shell").min_size(vec2(74.0, 36.0));
                             if ui.add(btn_shell).backing_on_hover_text("Buat Rongga").clicked() {
                                 action_start = Some("solid.shell");
                             }

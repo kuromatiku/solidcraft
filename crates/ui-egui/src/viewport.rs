@@ -7916,7 +7916,10 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
     // A tool's click that moved on the way (#2448) clicks where the button is let go.
     if app.viewport.tool_click && resp.drag_stopped() {
         app.viewport.tool_click = false;
-        if let Some(p) = ui.input(|i| i.pointer.latest_pos()).filter(|p| rect.contains(*p))
+        let is_finger_gesture = (app.preferences.pencil_mode || app.preferences.tablet_ui)
+            && (app.viewport.fingers.holding || app.viewport.fingers.any_moved);
+        if !is_finger_gesture
+            && let Some(p) = ui.input(|i| i.pointer.latest_pos()).filter(|p| rect.contains(*p))
             && app.tool.is_some()
         {
             crate::tools::on_hover(app, &proj, p, mods.shift);
@@ -8046,22 +8049,20 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
             .tool
             .as_ref()
             .is_some_and(|t| t.pts.is_empty() && (matches!(t.kind, crate::tools::Kind::Draw(2)) || (line_drag && t.cmd == "sketch.line")));
-        let tablet_sketch_drag = app.preferences.tablet_ui && app.tool.is_none() && app.session.active_sketch.is_some();
-        if (two_point_start || tablet_sketch_drag)
+        if two_point_start
             && !held
+            && !app.viewport.fingers.holding
             && primary_nav.is_none()
             && mode.is_none()
             && resp.drag_started_by(egui::PointerButton::Primary)
             && let Some(a) = ui.input(|i| i.pointer.press_origin())
         {
-            if tablet_sketch_drag {
-                app.start("sketch.line");
-            }
             crate::tools::on_click(app, &proj, a, mods.shift);
             app.viewport.draw_drag = app.tool.as_ref().is_some_and(|t| t.pts.len() == 1).then_some(a);
         } else if app.tool.is_some()
             && !app.viewport.trim_drag
             && !held
+            && !app.viewport.fingers.holding
             && primary_nav.is_none()
             && mode.is_none()
             && resp.drag_started_by(egui::PointerButton::Primary)
@@ -8095,7 +8096,11 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
             if crate::browser_canvas::click(app, &proj, p) {
                 // Calibrate Canvas: the click sets Point A or B on the image (#9108).
             } else if app.tool.is_some() {
-                crate::tools::on_click(app, &proj, p, mods.shift);
+                let is_finger_gesture = (app.preferences.pencil_mode || app.preferences.tablet_ui)
+                    && (app.viewport.fingers.holding || app.viewport.fingers.any_moved);
+                if !is_finger_gesture {
+                    crate::tools::on_click(app, &proj, p, mods.shift);
+                }
             } else if app.dialog.as_ref().is_some_and(|d| d.wants_picks()) {
                 if add && crate::dialogs_move::add_body_click(app, &hits, allow_toggle) {
                     // Ctrl/Shift+click: one more body for Move, which stays on From, Point or Axis.
@@ -8109,23 +8114,6 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
                         dialog_pick(app, &hit, sel);
                     }
                 } else if let Some(mut dialog) = app.dialog.take() {
-                    let is_direct =
-                        dialog.press_pull || dialog.command().is_some_and(|c| matches!(c, "solid.fillet" | "solid.chamfer" | "solid.extrude"));
-                    if app.preferences.tablet_ui && is_direct {
-                        let is_modified = dialog.primary().is_some_and(|(_, _, val)| {
-                            let t = val.trim();
-                            !t.is_empty() && t != "0 mm" && t != "0" && t != "0.0 mm" && t != "0.0" && t != "1 mm" && t != "2 mm"
-                        });
-                        if is_modified {
-                            dialog.confirm = true;
-                            app.dialog = Some(dialog);
-                        } else {
-                            app.dialog = Some(dialog);
-                            crate::dialogs::cancel(app);
-                            select(app, None, false, false);
-                        }
-                        return;
-                    }
                     // A pick field clicked into says what it is for when the click is not one (#10428).
                     if dialog.awaiting_pick {
                         dialog.pick_refused = dialog.active_input().and_then(|i| i.tip);
@@ -8178,36 +8166,6 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
                             let (add, allow_toggle) = if pen_select { (sel.is_some(), true) } else { (add, allow_toggle) };
                             select(app, sel.clone(), add, allow_toggle);
                             crate::select_other::note_click(app, p, if add || pen_select { None } else { sel.clone() });
-                            if app.preferences.tablet_ui
-                                && !held_mods.shift
-                                && app.session.active_sketch.is_none()
-                                && app.tool.is_none()
-                                && app.dialog.is_none()
-                            {
-                                if let Some(s) = &sel {
-                                    match s {
-                                        Sel::Face { .. } | Sel::Profile { .. } => {
-                                            app.session.selection = vec![s.clone()];
-                                            app.start("solid.press_pull");
-                                        }
-                                        Sel::Edge { .. } => {
-                                            app.session.selection = vec![s.clone()];
-                                            app.start("solid.fillet");
-                                        }
-                                        Sel::ExternalSketchCurve { sketch, .. } => {
-                                            let n =
-                                                crate::open_meshing::session_world(&app.session).sketch(*sketch).map_or(0, |sk| sk.profiles.len());
-                                            if n > 0 {
-                                                let items: Vec<serde_json::Value> =
-                                                    (0..n).map(|i| serde_json::json!({"type": "profile", "sketch": sketch, "index": i})).collect();
-                                                let _ = app.run("select.set", serde_json::json!({ "items": items }));
-                                                app.start("solid.extrude");
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
                         }
                     }
                 }

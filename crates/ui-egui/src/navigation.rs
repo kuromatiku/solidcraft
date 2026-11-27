@@ -877,10 +877,11 @@ fn handle_input(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &egui::
         device(app, rect, caps);
     }
 
-    // Pencil mode assigns finger gestures to navigation even when the separate preference is off.
+    // Pencil mode and tablet UI assign finger gestures to navigation.
+    // Dialogs (e.g. fillet, pad/extrude) and tools do not block touch navigation in tablet/pencil mode.
+    let touch_allowed = app.preferences.tablet_ui || app.preferences.pencil_mode || (app.tool.is_none() && app.dialog.is_none());
     let touch_enabled = (app.preferences.touchscreen_navigation || app.preferences.pencil_mode || app.preferences.tablet_ui)
-        && app.tool.is_none()
-        && app.dialog.is_none()
+        && touch_allowed
         && app.viewport.context_menu.is_none();
     let had_touch = app.viewport.touch.owned;
     let touch = app.viewport.touch.frame(ui, resp.rect, &[axes, readout.unwrap_or(Rect::NOTHING)], inside, touch_enabled, caps.orbit);

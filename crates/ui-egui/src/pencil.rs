@@ -80,7 +80,7 @@ struct Contact {
 #[derive(Debug, Default)]
 pub(crate) struct Fingers {
     /// A finger that went down in the open view is still down: primary presses are held back.
-    holding: bool,
+    pub(crate) holding: bool,
     /// When `holding` began, for a finger whose touch events never come.
     held_since: f64,
     contacts: Vec<Contact>,
@@ -89,7 +89,7 @@ pub(crate) struct Fingers {
     /// Maximum simultaneous contacts in the current touch cluster.
     max_contacts: usize,
     /// Whether any contact in the current cluster moved beyond tap slop.
-    any_moved: bool,
+    pub(crate) any_moved: bool,
     /// Timestamp when the first contact went down.
     touch_start: f64,
     /// The last finger tap in the view: where and when it ended.
